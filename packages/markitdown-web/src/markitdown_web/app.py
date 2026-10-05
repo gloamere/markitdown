@@ -1,29 +1,38 @@
+"""Invitation-only API. This release still binds to loopback for local evaluation."""
+
 import asyncio
-import tempfile
-import unicodedata
+import secrets
+import sqlite3
+from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.formparsers import MultiPartException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .conversion import ConversionError, run_conversion
+from .auth import AuthError, AuthService
+from .jobs import JobError, JobService
 from .preview import render_preview as render_preview
+from .state import Database, Settings
+from .state import safe_filename as safe_filename
 
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_TOTAL_BYTES = 50 * 1024 * 1024
 MAX_BODY_BYTES = MAX_TOTAL_BYTES + 1024 * 1024
+MAX_JSON_BYTES = 64 * 1024
 MAX_FILES = 10
 EXTENSIONS = (".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv", ".json")
 STATIC = Path(__file__).parent / "static"
-BODY_LIMIT_ERROR = "请求体超过 51 MiB 限制"
-_conversion_slots = asyncio.Semaphore(2)
+BODY_LIMIT_ERROR = "请求体超过大小限制"
+SESSION_COOKIE = "markitdown_session"
 
 
 class LocalRequestMiddleware:
@@ -35,9 +44,15 @@ class LocalRequestMiddleware:
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
+        limit = MAX_BODY_BYTES if scope["path"] == "/api/jobs" else MAX_JSON_BYTES
 
         async def safe_send(message: Message) -> None:
             if message["type"] == "http.response.start":
+                user_id = scope.get("state", {}).get("user_id")
+                if user_id:
+                    message["headers"].append(
+                        (b"x-markitdown-user", user_id.encode("ascii"))
+                    )
                 message["headers"].extend(
                     [
                         (b"cache-control", b"no-store"),
@@ -68,7 +83,7 @@ class LocalRequestMiddleware:
             except ValueError:
                 await reject(400, "无效的请求长度")
                 return
-            if length > MAX_BODY_BYTES:
+            if length > limit:
                 await reject(413, BODY_LIMIT_ERROR)
                 return
 
@@ -88,10 +103,10 @@ class LocalRequestMiddleware:
                 except (UnicodeError, ValueError):
                     same_origin = False
                 if not same_origin:
-                    await reject(403, "仅允许从本机工作台发起转换")
+                    await reject(403, "仅允许从同源工作台发起请求")
                     return
             if headers.get(b"x-markitdown-request") != b"1":
-                await reject(403, "缺少本机请求校验标记")
+                await reject(403, "缺少请求校验标记")
                 return
 
         received = 0
@@ -101,106 +116,392 @@ class LocalRequestMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > MAX_BODY_BYTES:
-                    # Multipart parser closes its temporary files for this exception.
+                if received > limit:
+                    if scope["path"] != "/api/jobs":
+                        raise HTTPException(413, BODY_LIMIT_ERROR)
+                    # Multipart parser closes its temporary files on this exception.
                     raise MultiPartException(BODY_LIMIT_ERROR)
             return message
 
         await self.app(scope, bounded_receive, safe_send)
 
 
-app = FastAPI(title="MarkItDown 本机工作台", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_middleware(
-    TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"]
-)
-app.add_middleware(LocalRequestMiddleware)
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+class InputModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
-def safe_filename(raw: str | None) -> str:
-    name = (raw or "document").replace("\\", "/").rsplit("/", 1)[-1]
-    name = "".join(
-        char
-        for char in name
-        if not unicodedata.category(char).startswith("C") and char not in '<>:"|?*'
-    ).strip(" .")
-    suffix = Path(name).suffix.lower()
-    stem = name[: -len(suffix)] if suffix else name
-    return (stem[:160].strip(" .") or "document") + suffix[:16]
+class LoginInput(InputModel):
+    username: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=1, max_length=128)
 
 
-@app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(STATIC / "index.html", media_type="text/html")
+class RegisterInput(InputModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=12, max_length=128)
+    invite_token: str = Field(min_length=16, max_length=128)
 
 
-@app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+class InviteInput(InputModel):
+    ttl_hours: StrictInt = Field(default=24, ge=1, le=168)
 
 
-@app.get("/api/config")
-async def config() -> dict:
-    return {
-        "max_file_bytes": MAX_FILE_BYTES,
-        "max_total_bytes": MAX_TOTAL_BYTES,
-        "max_files": MAX_FILES,
-        "extensions": list(EXTENSIONS),
-    }
+class UserLimitsInput(InputModel):
+    daily_quota: StrictInt | None = Field(default=None, ge=1, le=1000)
+    max_file_bytes: StrictInt | None = Field(
+        default=None, ge=1024 * 1024, le=MAX_FILE_BYTES
+    )
+    is_active: StrictBool | None = None
 
 
-async def convert_upload(upload: UploadFile) -> dict:
-    filename = safe_filename(upload.filename)
-    result = {"filename": filename, "markdown": "", "html": "", "error": None}
-    suffix = Path(filename).suffix.lower()
-    try:
-        if suffix not in EXTENSIONS:
-            raise ConversionError("暂不支持此格式，请上传 PDF、DOCX、XLSX 或文本文件")
-        if upload.size is not None and upload.size > MAX_FILE_BYTES:
-            raise ConversionError("单个文件不能超过 20 MiB")
-        with tempfile.TemporaryDirectory(prefix="markitdown-web-") as temporary:
-            path = Path(temporary) / ("document" + suffix)
-            size = 0
-            with path.open("wb") as target:
-                while chunk := await upload.read(64 * 1024):
-                    size += len(chunk)
-                    if size > MAX_FILE_BYTES:
-                        raise ConversionError("单个文件不能超过 20 MiB")
-                    target.write(chunk)
-            if not size:
-                raise ConversionError("文件为空，请选择有内容的文档")
-            async with _conversion_slots:
-                markdown, html = await asyncio.to_thread(run_conversion, path, suffix)
-            result.update(markdown=markdown, html=html)
-    except ConversionError as exc:
-        result["error"] = str(exc)
-    except Exception:
-        result["error"] = "转换失败，请检查文档后重试"
-    return result
+class ArchiveInput(InputModel):
+    job_ids: list[str] = Field(min_length=1, max_length=10)
 
 
-@app.post("/api/convert")
-async def convert(request: Request) -> dict:
-    try:
-        async with request.form(max_files=MAX_FILES, max_fields=0) as form:
-            files = form.getlist("files")
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or Settings()
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        # No accounts or secrets are created automatically. Bootstrap is interactive.
+        database = Database(settings)
+        application.state.db = database
+        application.state.upload_slots = asyncio.Semaphore(2)
+        application.state.auth_slots = asyncio.Semaphore(4)
+        application.state.auth = AuthService(database, settings)
+        application.state.jobs = JobService(database, settings)
+        if settings.start_workers:
+            await asyncio.to_thread(application.state.jobs.start)
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(application.state.jobs.stop)
+
+    application = FastAPI(
+        title="MarkItDown 邀请制工作台",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
+    application.state.settings = settings
+    application.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"]
+    )
+    application.add_middleware(LocalRequestMiddleware)
+    application.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    @application.exception_handler(AuthError)
+    @application.exception_handler(JobError)
+    async def service_error(request: Request, exc: AuthError | JobError):
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+    @application.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError):
+        return JSONResponse({"detail": "请求参数不符合要求"}, status_code=422)
+
+    @application.exception_handler(MultiPartException)
+    async def multipart_error(request: Request, exc: MultiPartException):
+        code = 413 if str(exc) == BODY_LIMIT_ERROR else 400
+        return JSONResponse({"detail": "上传请求无效或超过大小限制"}, status_code=code)
+
+    @application.exception_handler(sqlite3.OperationalError)
+    async def database_busy(request: Request, exc: sqlite3.OperationalError):
+        return JSONResponse({"detail": "服务暂时繁忙，请稍后重试"}, status_code=503)
+
+    def auth(request: Request) -> AuthService:
+        return request.app.state.auth
+
+    def jobs(request: Request) -> JobService:
+        return request.app.state.jobs
+
+    async def session(
+        request: Request, *, mutate: bool = False, admin: bool = False
+    ) -> dict:
+        raw_token = request.cookies.get(SESSION_COOKIE, "")
+        current = await asyncio.to_thread(auth(request).get_session, raw_token)
+        if current is None:
+            raise HTTPException(401, "请先登录")
+        request.state.user_id = current["user"]["id"]
+        if mutate:
+            supplied = request.headers.get("X-CSRF-Token", "")
             if (
-                not files
-                or len(files) > MAX_FILES
-                or any(not isinstance(file, UploadFile) for file in files)
-                or any(key != "files" for key in form)
+                len(supplied) != 64
+                or any(char not in "0123456789abcdef" for char in supplied)
+                or not secrets.compare_digest(supplied, current["csrf_token"])
             ):
-                raise HTTPException(400, "请上传 1–10 个文件，字段名为 files")
-            uploads: list[UploadFile] = files  # type: ignore[assignment]
-            if sum(upload.size or 0 for upload in uploads) > MAX_TOTAL_BYTES:
-                raise HTTPException(413, "一批文件总大小不能超过 50 MiB")
-            # Keep results in upload order. A failed document never hides good results.
-            results = [await convert_upload(upload) for upload in uploads]
-            return {"results": results}
-    except StarletteHTTPException as exc:
-        if exc.detail == BODY_LIMIT_ERROR:
-            raise HTTPException(413, BODY_LIMIT_ERROR) from exc
-        raise
-    except MultiPartException as exc:
-        status = 413 if str(exc) == BODY_LIMIT_ERROR else 400
-        raise HTTPException(status, "上传请求无效或超过大小限制") from exc
+                raise HTTPException(403, "请求校验失败，请刷新页面后重试")
+        if admin and not current["user"]["is_admin"]:
+            raise HTTPException(403, "需要管理员权限")
+        return current
+
+    async def session_payload(request: Request, current: dict) -> dict:
+        request.state.user_id = current["user"]["id"]
+        return {
+            **current,
+            "usage": await asyncio.to_thread(
+                jobs(request).get_usage, current["user"]["id"]
+            ),
+        }
+
+    def client_ip(request: Request) -> str:
+        # Uvicorn is run with proxy_headers=False; never trust arbitrary X-Forwarded-For.
+        return request.client.host if request.client else "unknown"
+
+    @application.get("/")
+    async def index() -> FileResponse:
+        return FileResponse(STATIC / "index.html", media_type="text/html")
+
+    @application.get("/api/health")
+    async def health() -> dict:
+        return {"status": "ok"}
+
+    @application.get("/api/config")
+    async def config(request: Request) -> dict:
+        return {
+            "max_file_bytes": settings.max_file_bytes,
+            "max_total_bytes": settings.max_total_bytes,
+            "max_files": settings.max_files,
+            "extensions": list(EXTENSIONS),
+            "retention_seconds": settings.retention_seconds,
+            "has_admin": await asyncio.to_thread(auth(request).has_admin),
+        }
+
+    @application.get("/api/me")
+    async def me(request: Request) -> dict:
+        return await session_payload(request, await session(request))
+
+    @application.post("/api/auth/register", status_code=201)
+    async def register(request: Request, body: RegisterInput) -> dict:
+        slots = request.app.state.auth_slots
+        if slots.locked():
+            raise HTTPException(429, "登录或注册请求较多，请稍后重试")
+        async with slots:
+            user = await asyncio.to_thread(
+                auth(request).register,
+                body.username,
+                body.password,
+                body.invite_token,
+                client_ip(request),
+            )
+        return {"user": user}
+
+    @application.post("/api/auth/login")
+    async def login(request: Request, body: LoginInput) -> JSONResponse:
+        slots = request.app.state.auth_slots
+        if slots.locked():
+            raise HTTPException(429, "登录或注册请求较多，请稍后重试")
+        async with slots:
+            raw_token, current = await asyncio.to_thread(
+                auth(request).login, body.username, body.password, client_ip(request)
+            )
+        previous = request.cookies.get(SESSION_COOKIE)
+        if previous:
+            await asyncio.to_thread(auth(request).logout, previous)
+        response = JSONResponse(await session_payload(request, current))
+        response.set_cookie(
+            SESSION_COOKIE,
+            raw_token,
+            max_age=settings.session_seconds,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="strict",
+            path="/",
+        )
+        return response
+
+    @application.post("/api/auth/logout")
+    async def logout(request: Request) -> JSONResponse:
+        await session(request, mutate=True)
+        await asyncio.to_thread(
+            auth(request).logout, request.cookies.get(SESSION_COOKIE, "")
+        )
+        response = JSONResponse({"status": "ok"})
+        response.delete_cookie(
+            SESSION_COOKIE,
+            path="/",
+            secure=settings.cookie_secure,
+            httponly=True,
+            samesite="strict",
+        )
+        return response
+
+    @application.get("/api/jobs")
+    async def list_jobs(request: Request) -> dict:
+        current = await session(request)
+        user_id = current["user"]["id"]
+        return {
+            "jobs": await asyncio.to_thread(jobs(request).list_jobs, user_id),
+            "usage": await asyncio.to_thread(jobs(request).get_usage, user_id),
+        }
+
+    @application.post("/api/jobs", status_code=202)
+    async def submit_jobs(request: Request) -> dict:
+        current = await session(request, mutate=True)
+        slots = request.app.state.upload_slots
+        if slots.locked():
+            raise HTTPException(429, "同时上传人数较多，请稍后重试")
+        async with slots:
+            return await ingest_jobs(request, current)
+
+    async def ingest_jobs(request: Request, current: dict) -> dict:
+        user_id = current["user"]["id"]
+        usage = await asyncio.to_thread(jobs(request).get_usage, user_id)
+        if usage["remaining"] <= 0:
+            raise HTTPException(429, "今日转换额度已用完，请在 UTC 次日重试")
+        max_file_bytes = min(settings.max_file_bytes, current["user"]["max_file_bytes"])
+        accepted: list[dict] = []
+        errors: list[dict] = []
+        try:
+            async with request.form(max_files=settings.max_files, max_fields=0) as form:
+                files = form.getlist("files")
+                if (
+                    not files
+                    or len(files) > settings.max_files
+                    or any(not isinstance(file, UploadFile) for file in files)
+                    or any(key != "files" for key in form)
+                ):
+                    raise HTTPException(400, "请上传 1–10 个文件，字段名为 files")
+                uploads: list[UploadFile] = files  # type: ignore[assignment]
+                if (
+                    sum(upload.size or 0 for upload in uploads)
+                    > settings.max_total_bytes
+                ):
+                    raise HTTPException(413, "一批文件总大小不能超过 50 MiB")
+                read_total = 0
+                for upload in uploads:
+                    filename = safe_filename(upload.filename)
+                    suffix = Path(filename).suffix.lower()
+                    if suffix not in EXTENSIONS:
+                        errors.append({"filename": filename, "error": "暂不支持此文件格式"})
+                        continue
+                    if upload.size is not None and upload.size > max_file_bytes:
+                        errors.append(
+                            {"filename": filename, "error": "文件超过当前账户的单文件大小限制"}
+                        )
+                        continue
+                    payload = bytearray()
+                    while chunk := await upload.read(64 * 1024):
+                        payload.extend(chunk)
+                        read_total += len(chunk)
+                        if (
+                            len(payload) > max_file_bytes
+                            or read_total > settings.max_total_bytes
+                        ):
+                            raise HTTPException(413, "上传文件超过大小限制")
+                    if not payload:
+                        errors.append({"filename": filename, "error": "文件为空"})
+                        continue
+                    accepted.append(
+                        {"filename": filename, "suffix": suffix, "data": bytes(payload)}
+                    )
+                if not accepted:
+                    return {"jobs": [], "errors": errors}
+                created = await asyncio.to_thread(
+                    jobs(request).enqueue, user_id, accepted
+                )
+                return {"jobs": created, "errors": errors}
+        except StarletteHTTPException as exc:
+            if exc.detail == BODY_LIMIT_ERROR:
+                raise HTTPException(413, BODY_LIMIT_ERROR) from exc
+            raise
+
+    # Static archive route must precede /{job_id} for unambiguous routing.
+    @application.post("/api/jobs/archive")
+    async def archive(request: Request, body: ArchiveInput) -> Response:
+        current = await session(request, mutate=True)
+        content = await asyncio.to_thread(
+            jobs(request).archive, current["user"]["id"], body.job_ids
+        )
+        return Response(
+            content,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": 'attachment; filename="markitdown-batch.zip"'
+            },
+        )
+
+    @application.get("/api/jobs/{job_id}")
+    async def detail(request: Request, job_id: str) -> dict:
+        current = await session(request)
+        return await asyncio.to_thread(
+            jobs(request).get_job, current["user"]["id"], job_id, include_content=True
+        )
+
+    @application.get("/api/jobs/{job_id}/download")
+    async def download(request: Request, job_id: str) -> Response:
+        current = await session(request)
+        filename, content = await asyncio.to_thread(
+            jobs(request).download, current["user"]["id"], job_id
+        )
+        return Response(
+            content,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"document.md\"; filename*=UTF-8''{quote(filename, safe='')}"
+            },
+        )
+
+    @application.post("/api/jobs/{job_id}/retry")
+    async def retry(request: Request, job_id: str) -> dict:
+        current = await session(request, mutate=True)
+        return await asyncio.to_thread(
+            jobs(request).retry, current["user"]["id"], job_id
+        )
+
+    @application.delete("/api/jobs/{job_id}")
+    async def delete_job(request: Request, job_id: str) -> dict:
+        current = await session(request, mutate=True)
+        await asyncio.to_thread(jobs(request).delete_job, current["user"]["id"], job_id)
+        return {"status": "deleted"}
+
+    @application.get("/api/admin/users")
+    async def users(request: Request) -> dict:
+        current = await session(request, admin=True)
+        return {
+            "users": await asyncio.to_thread(
+                auth(request).list_users, current["user"]["id"]
+            )
+        }
+
+    @application.patch("/api/admin/users/{user_id}")
+    async def update_user(
+        request: Request, user_id: str, body: UserLimitsInput
+    ) -> dict:
+        current = await session(request, mutate=True, admin=True)
+        changes = body.model_dump(exclude_none=True)
+        if not changes:
+            raise HTTPException(400, "请提供要修改的额度或状态")
+        return await asyncio.to_thread(
+            auth(request).update_user, current["user"]["id"], user_id, **changes
+        )
+
+    @application.get("/api/admin/invites")
+    async def invites(request: Request) -> dict:
+        current = await session(request, admin=True)
+        return {
+            "invites": await asyncio.to_thread(
+                auth(request).list_invites, current["user"]["id"]
+            )
+        }
+
+    @application.post("/api/admin/invites", status_code=201)
+    async def create_invite(request: Request, body: InviteInput) -> dict:
+        current = await session(request, mutate=True, admin=True)
+        return await asyncio.to_thread(
+            auth(request).create_invite,
+            current["user"]["id"],
+            ttl_seconds=body.ttl_hours * 3600,
+        )
+
+    @application.delete("/api/admin/invites/{invite_id}")
+    async def revoke_invite(request: Request, invite_id: str) -> dict:
+        current = await session(request, mutate=True, admin=True)
+        await asyncio.to_thread(
+            auth(request).revoke_invite, current["user"]["id"], invite_id
+        )
+        return {"status": "revoked"}
+
+    return application
+
+
+app = create_app()

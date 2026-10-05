@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "markitdown-web"
-version = "0.1.0"
-description = "Local-first Chinese document-to-Markdown workspace"
+version = "0.2.0"
+description = "Invitation-only document-to-Markdown workspace"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
   "markitdown[pdf,docx,xlsx]>=0.1.0,<0.2",
   "fastapi>=0.115,<1",
@@ -16,6 +17,8 @@ dependencies = [
   "python-multipart>=0.0.20,<1",
   "markdown-it-py>=3,<5",
   "bleach>=6.2,<7",
+  "argon2-cffi>=25,<26",
+  "filelock>=3,<4",
 ]
 
 [project.optional-dependencies]

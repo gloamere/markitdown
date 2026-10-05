@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import socket
 import sys
 import zipfile
@@ -19,11 +20,24 @@ MAX_ARCHIVE_MEMBERS = 2000
 
 
 def apply_limits() -> None:
+    # On Linux, an abrupt service crash must not leave a parser running after
+    # its queue slot is recovered by a new service process.
+    expected_parent = os.environ.get("MARKITDOWN_PARENT_PID")
+    if sys.platform == "linux" and expected_parent:
+        import ctypes
+        import signal
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
+            raise RuntimeError("Cannot enforce parser parent-death cleanup")
+        if os.getppid() != int(expected_parent):
+            os._exit(1)
     # Best-effort resource controls on Unix. Windows still has the parent timeout.
     try:
         import resource
 
         resource.setrlimit(resource.RLIMIT_CPU, (35, 35))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 * 1024,) * 2)
         resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES,) * 2)
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))

@@ -27,6 +27,7 @@ def run_conversion(path: Path, suffix: str) -> tuple[str, str]:
         "TMP": str(path.parent),
         "PYTHONUTF8": "1",
         "ORT_DISABLE_TELEMETRY": "1",
+        "MARKITDOWN_PARENT_PID": str(os.getpid()),
         "OPENBLAS_NUM_THREADS": "1",
         "OMP_NUM_THREADS": "1",
     }

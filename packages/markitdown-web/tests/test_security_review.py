@@ -6,6 +6,7 @@ import io
 import zipfile
 
 import pytest
+from conftest import wait_job
 
 from markitdown_web.conversion import ConversionError
 from markitdown_web.worker import validate_office
@@ -63,13 +64,16 @@ def test_retargeted_docx_part_cannot_bypass_entity_preflight(encoding):
 
 def test_retargeted_docx_entity_is_a_per_document_error(client, request_headers):
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers=request_headers,
         files={"files": ("retargeted.docx", docx_with_retargeted_xml_part())},
     )
-    assert response.status_code == 200
-    result = response.json()["results"][0]
+    assert response.status_code == 202
+    result = wait_job(client, response.json()["jobs"][0])
+    assert result["status"] == "failed"
     assert result["error"]
-    assert result["markdown"] == ""
-    assert result["html"] == ""
-    assert "LOCAL_ENTITY_WAS_EXPANDED" not in response.text
+    assert not result.get("markdown")
+    assert not result.get("html")
+    assert (
+        "LOCAL_ENTITY_WAS_EXPANDED" not in client.get(f"/api/jobs/{result['id']}").text
+    )

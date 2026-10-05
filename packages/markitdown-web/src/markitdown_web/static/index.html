@@ -4,101 +4,75 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <meta name="description" content="在本机将文档转换为清晰、可编辑的 Markdown。无需 AI，也不上传到第三方服务。">
-    <title>MarkItDown · 本地文档转换</title>
+    <meta name="description" content="邀请制文档工作台，将文件转换为 Markdown。独立账户、私有历史，文件保留 24 小时。">
+    <title>MarkItDown · 资料工作台</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="/static/app.js" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#workspace">跳到转换工作区</a>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
     <div class="app-shell">
       <header class="site-header">
-        <a class="brand" href="/" aria-label="MarkItDown 首页">
-          <span class="brand-mark" aria-hidden="true">m<span>↓</span></span>
-          <span>MarkItDown<span class="brand-edition">LOCAL WORKSPACE</span></span>
-        </a>
-        <span class="local-badge"><span class="status-dot" aria-hidden="true"></span>仅在本机处理</span>
+        <a class="brand" href="/" aria-label="MarkItDown 首页"><span class="brand-mark" aria-hidden="true">m<span>↓</span></span><span>MarkItDown<span class="brand-edition">SHARED SPACE · PRIVATE FILES</span></span></a>
+        <span class="local-badge"><span class="status-dot" aria-hidden="true"></span>邀请制资料工作台</span>
       </header>
-
-      <main>
+      <main id="main-content">
         <section class="intro" aria-labelledby="page-title">
-          <div>
-            <p class="eyebrow">LESS FORMATTING. MORE CLARITY.</p>
-            <h1 id="page-title">文档，归于简洁<span>。</span></h1>
-            <p class="intro-copy">把文件转换为 Markdown，让内容更易阅读、编辑与复用。</p>
-          </div>
-          <div class="intro-note"><span aria-hidden="true">↘</span><p>保留内容结构<br>回到文字本身</p></div>
+          <div><p class="eyebrow">LESS FORMATTING. MORE CLARITY.</p><h1 id="page-title">文档，归于简洁<span>。</span></h1><p class="intro-copy">把文件转换为 Markdown，让内容更易阅读、编辑与复用。</p></div>
+          <div class="intro-note"><span aria-hidden="true">↘</span><p>一起使用工作台<br>各自保管资料</p></div>
         </section>
-
-        <div class="connection-notice" id="connection-notice" hidden>
-          <p id="connection-message"></p>
-          <button type="button" class="text-button" id="reconnect-button">重新连接</button>
-        </div>
+        <div class="connection-notice" id="connection-notice" hidden><p id="connection-message"></p><button type="button" class="text-button" id="reconnect-button">重新连接</button></div>
         <div class="notice" id="notice" role="alert" hidden></div>
+        <section class="bootstrap-notice panel" id="bootstrap-notice" hidden aria-labelledby="bootstrap-title"><h2 id="bootstrap-title">工作台还差最后一步</h2><p>请服务所有者在运行服务的电脑上，执行 <code>markitdown-web bootstrap-admin</code>，按提示创建首位管理员。网页不能创建管理员，也没有默认密码。</p></section>
 
-        <section class="workspace" id="workspace" aria-label="文档转换工作区">
-          <section class="panel input-panel" aria-labelledby="files-heading">
-            <div class="panel-header">
-              <h2 id="files-heading"><span class="step-number">01</span>添加文件</h2>
-              <button type="button" class="text-button" id="clear-button" disabled>清空</button>
-            </div>
-            <div class="input-body">
-              <div class="drop-zone" id="drop-zone">
-                <span class="upload-symbol" aria-hidden="true">↑</span>
-                <p class="drop-title">把文件拖到这里</p>
-                <p class="drop-subtitle">或从电脑中选择一个或多个文件</p>
-                <button type="button" class="choose-button" id="choose-button">选择文件<span aria-hidden="true">＋</span></button>
-                <input id="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv,.json" aria-label="选择要转换的文件" hidden>
-                <p class="upload-limits" id="upload-limits">最多 10 个文件 · 单个 20 MiB · 总计 50 MiB</p>
-              </div>
-              <div class="format-list" aria-label="支持的文件格式" id="format-list">
-                <span>PDF</span><span>DOCX</span><span>XLSX</span><span>TXT</span><span>MD</span><span>CSV</span><span>JSON</span>
-              </div>
-              <p class="format-note">PDF 仅支持可选中文字的文档，扫描件不支持 OCR</p>
-
-              <div class="queue-heading"><h3>文件队列 <span id="queue-count">0</span></h3><span id="queue-size">0 B</span></div>
-              <div class="queue-empty" id="queue-empty"><span aria-hidden="true">▤</span><p>你的文件将在这里排好队</p></div>
-              <ul class="file-list" id="file-list" aria-label="待转换文件"></ul>
-            </div>
-            <div class="conversion-footer">
-              <button type="button" class="primary-button" id="convert-button" disabled><span id="convert-label">开始转换</span><span class="convert-arrow" aria-hidden="true">→</span></button>
-              <p id="conversion-summary" role="status" aria-live="polite" aria-atomic="true">正在连接本机服务…</p>
-            </div>
-          </section>
-
-          <section class="panel output-panel" aria-labelledby="output-heading">
-            <div class="panel-header output-header">
-              <h2 id="output-heading"><span class="step-number">02</span>Markdown</h2>
-              <span class="output-label" id="output-label">等待转换</span>
-            </div>
-            <div class="output-toolbar">
-              <div class="view-switch" role="tablist" aria-label="Markdown 显示方式">
-                <button type="button" id="preview-tab" role="tab" aria-selected="true" aria-controls="preview-panel" tabindex="0">预览</button>
-                <button type="button" id="source-tab" role="tab" aria-selected="false" aria-controls="source-panel" tabindex="-1">源码</button>
-              </div>
-              <div class="output-actions">
-                <button type="button" class="tool-button" id="copy-button" disabled><span aria-hidden="true">▣</span>复制</button>
-                <button type="button" class="tool-button" id="download-button" disabled><span aria-hidden="true">↓</span>下载 .md</button>
-              </div>
-            </div>
-            <div class="document-heading" id="document-heading" hidden><span id="document-name"></span><span id="document-length"></span></div>
-            <div class="output-content" id="output-content">
-              <div class="output-empty" id="output-empty">
-                <div class="paper-illustration" aria-hidden="true"><span>#</span><i></i><i></i><i></i></div>
-                <h3 id="empty-title">下一站，Markdown</h3>
-                <p id="empty-description">添加文件并开始转换<br>在这里预览结果，或查看 Markdown 源码</p>
-              </div>
-              <div id="preview-panel" class="document-panel" role="tabpanel" aria-labelledby="preview-tab" tabindex="0" hidden><article class="markdown-body" id="markdown-preview"></article></div>
-              <div id="source-panel" class="document-panel source-panel" role="tabpanel" aria-labelledby="source-tab" hidden><textarea class="markdown-source" id="markdown-source" aria-label="Markdown 源码" spellcheck="false" readonly></textarea></div>
-            </div>
-            <div class="output-footer"><span><span class="small-dot" aria-hidden="true"></span>内容只保留在当前页面</span><span>清空或刷新即可移除</span></div>
-          </section>
+        <section class="auth-layout" id="auth-section" aria-label="登录或使用邀请注册">
+          <div class="auth-story"><span class="auth-symbol" aria-hidden="true">文<span>↓</span></span><h2>留住内容，<br>放下格式。</h2><p>一个安静的资料工作区。<br>登录后找回自己的转换记录，<br>把整理的时间还给思考。</p><ul><li>只有你能查看自己的文件</li><li>从上传起保留 24 小时</li><li>不调用 AI 或第三方转换服务</li></ul></div>
+          <div class="panel auth-panel">
+            <div class="auth-tabs" role="tablist" aria-label="账户操作"><button type="button" id="login-tab" role="tab" aria-selected="true" aria-controls="login-form">登录</button><button type="button" id="register-tab" role="tab" aria-selected="false" aria-controls="register-form" tabindex="-1">邀请注册</button></div>
+            <p class="auth-message" id="auth-message" role="status" aria-live="polite">正在连接服务…</p>
+            <form id="login-form" role="tabpanel" aria-labelledby="login-tab">
+              <label for="login-username">用户名</label><input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9_.\-]{3,32}" minlength="3" maxlength="32" required aria-describedby="username-help">
+              <label for="login-password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required>
+              <button type="submit" class="primary-button" id="login-button" disabled>进入工作台 <span aria-hidden="true">→</span></button>
+            </form>
+            <form id="register-form" role="tabpanel" aria-labelledby="register-tab" hidden>
+              <label for="register-username">用户名</label><input id="register-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9_.\-]{3,32}" minlength="3" maxlength="32" required aria-describedby="username-help">
+              <label for="register-password">密码</label><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required aria-describedby="password-help"><p class="field-help" id="password-help">12–128 个字符，请使用独立的长密码</p>
+              <label for="invite-token">邀请码</label><input id="invite-token" name="invite_token" autocomplete="off" autocapitalize="none" spellcheck="false" required><p class="field-help">向工作台管理员索取，一次性使用</p>
+              <button type="submit" class="primary-button" id="register-button" disabled>创建账户</button>
+            </form>
+            <p class="field-help" id="username-help">用户名为 3–32 位小写英文字母、数字、下划线、点或短横线</p>
+            <button type="button" class="text-button" id="logout-retry" hidden>重试退出</button>
+          </div>
         </section>
 
-        <footer class="site-footer"><p>基于 Microsoft MarkItDown · “本机”指运行服务的电脑</p><p>无需 AI <span aria-hidden="true">/</span> 无第三方上传 <span aria-hidden="true">/</span> 不保存转换记录</p></footer>
+        <section id="session-section" hidden aria-label="个人资料工作台">
+          <div class="account-bar"><div><span class="account-name" id="account-name"></span><span class="account-role" id="account-role"></span><p id="quota-summary" role="status" aria-live="polite"></p><p class="quota-reset" id="quota-reset"></p></div><div class="account-actions"><button type="button" class="text-button" id="admin-toggle" aria-expanded="false" aria-controls="admin-panel" hidden>管理工作台</button><button type="button" class="text-button" id="logout-button">退出登录</button></div></div>
+          <section class="workspace" id="workspace" aria-label="文档转换工作区">
+            <section class="panel input-panel" aria-labelledby="files-heading">
+              <div class="panel-header"><h2 id="files-heading"><span class="step-number">01</span>添加文件</h2><button type="button" class="text-button" id="clear-button" disabled>清空待上传</button></div>
+              <div class="input-body">
+                <div class="drop-zone" id="drop-zone"><span class="upload-symbol" aria-hidden="true">↑</span><p class="drop-title">把文件拖到这里</p><p class="drop-subtitle">或从电脑中选择一个或多个文件</p><button type="button" class="choose-button" id="choose-button" disabled>选择文件<span aria-hidden="true">＋</span></button><input id="file-input" type="file" multiple aria-label="选择要转换的文件" hidden disabled><p class="upload-limits" id="upload-limits"></p></div>
+                <div class="format-list" aria-label="支持的文件格式" id="format-list"></div><p class="format-note">PDF 需要文字层，不支持扫描件 OCR · 不支持 URL 上传</p>
+                <div class="queue-heading"><h3>待上传 <span id="queue-count">0</span></h3><span id="queue-size">0 B</span></div><div class="queue-empty" id="queue-empty"><span aria-hidden="true">▤</span><p>你的文件将在这里排好队</p></div><ul class="file-list" id="file-list" aria-label="待上传文件"></ul>
+              </div>
+              <div class="conversion-footer"><button type="button" class="primary-button" id="convert-button" disabled><span id="convert-label">上传并转换</span><span class="convert-arrow" aria-hidden="true">→</span></button><p id="conversion-summary" role="status" aria-live="polite" aria-atomic="true">上传与重试进入队列后，均计入当日额度</p></div>
+              <section class="history-section" aria-labelledby="history-heading"><div class="queue-heading"><h3 id="history-heading">我的转换记录 <span id="history-count">0</span></h3><button type="button" class="text-button" id="refresh-button">刷新</button></div><p class="history-note" id="history-note" role="status" aria-live="polite">仅展示当前账户最近 100 条记录</p><div class="history-empty" id="history-empty">还没有转换记录</div><ul class="file-list history-list" id="history-list" aria-label="我的转换记录"></ul><div class="archive-bar"><span id="archive-count">勾选已完成文件，最多 10 个</span><button type="button" class="choose-button" id="archive-button" disabled>下载 ZIP</button></div></section>
+            </section>
+            <section class="panel output-panel" aria-labelledby="output-heading">
+              <div class="panel-header output-header"><h2 id="output-heading"><span class="step-number">02</span>Markdown</h2><span class="output-label" id="output-label">等待选择</span></div>
+              <div class="output-toolbar"><div class="view-switch" role="tablist" aria-label="Markdown 显示方式"><button type="button" id="preview-tab" role="tab" aria-selected="true" aria-controls="preview-panel" tabindex="0">预览</button><button type="button" id="source-tab" role="tab" aria-selected="false" aria-controls="source-panel" tabindex="-1">源码</button></div><div class="output-actions"><button type="button" class="tool-button" id="copy-button" disabled><span aria-hidden="true">▣</span>复制</button><button type="button" class="tool-button" id="download-button" disabled><span aria-hidden="true">↓</span>下载 .md</button></div></div>
+              <div class="document-heading" id="document-heading" hidden><span id="document-name"></span><span id="document-length"></span></div>
+              <div class="output-content" id="output-content"><div class="output-empty" id="output-empty"><div class="paper-illustration" aria-hidden="true"><span>#</span><i></i><i></i><i></i></div><h3 id="empty-title">下一站，Markdown</h3><p id="empty-description">上传文件，或选择一条转换记录\n在这里预览结果，或查看 Markdown 源码</p></div><div id="preview-panel" class="document-panel" role="tabpanel" aria-labelledby="preview-tab" tabindex="0" hidden><article class="markdown-body" id="markdown-preview"></article></div><div id="source-panel" class="document-panel source-panel" role="tabpanel" aria-labelledby="source-tab" hidden><textarea class="markdown-source" id="markdown-source" aria-label="Markdown 源码" spellcheck="false" readonly></textarea></div></div>
+              <div class="output-footer"><span><span class="small-dot" aria-hidden="true"></span>仅你可见 · 上传起保留 24 小时</span><span id="document-expiry">请及时下载需要保留的内容</span></div>
+            </section>
+          </section>
+          <section class="panel admin-panel" id="admin-panel" hidden aria-labelledby="admin-heading"><div class="panel-header"><h2 id="admin-heading">工作台管理</h2><button type="button" class="text-button" id="admin-refresh">刷新管理信息</button></div><p class="admin-explanation">管理邀请码与账户额度。此处不提供其他用户的文件或转换内容。</p><div class="admin-grid"><section aria-labelledby="invites-heading"><div class="admin-section-heading"><h3 id="invites-heading">邀请新成员</h3><button type="button" class="choose-button" id="invite-create">生成 24 小时邀请码</button></div><div class="invite-result" id="invite-result" hidden><label for="new-invite-token">新邀请码 · 仅本次显示，请及时复制</label><input id="new-invite-token" readonly autocomplete="off"><p id="invite-expiry"></p><button type="button" class="text-button" id="invite-copy">复制邀请码</button><button type="button" class="text-button" id="invite-dismiss">隐藏邀请码</button></div><ul class="admin-list" id="invites-list" aria-label="邀请码列表"></ul></section><section aria-labelledby="users-heading"><h3 id="users-heading">账户与额度</h3><p class="field-help">每日额度 1–1000 个文件 · 单文件 1–20 MiB</p><ul class="admin-list" id="users-list" aria-label="账户与额度"></ul></section></div><p class="admin-status" id="admin-status" role="status" aria-live="polite"></p></section>
+        </section>
+        <footer class="site-footer"><p>基于 Microsoft MarkItDown · 文件在运行服务的电脑上处理</p><p>独立账户 <span aria-hidden="true">/</span> 24 小时保留 <span aria-hidden="true">/</span> 无第三方转换上传</p></footer>
       </main>
     </div>
     <p class="sr-only" id="action-status" role="status" aria-live="polite" aria-atomic="true"></p>
-    <noscript><p class="noscript">请启用 JavaScript，以使用本地文件转换功能。</p></noscript>
+    <noscript><p class="noscript">请启用 JavaScript，以使用资料工作台。</p></noscript>
   </body>
 </html>

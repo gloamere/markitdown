@@ -7,8 +7,10 @@ import importlib
 from html.parser import HTMLParser
 
 import pytest
+from conftest import wait_job
 
-app_module = importlib.import_module("markitdown_web.app")
+jobs_module = importlib.import_module("markitdown_web.jobs")
+state_module = importlib.import_module("markitdown_web.state")
 MIB = 1024 * 1024
 
 
@@ -28,7 +30,7 @@ class ElementCollector(HTMLParser):
 def test_conversion_requires_custom_request_header(client, header_value):
     headers = {} if header_value is None else {"X-MarkItDown-Request": header_value}
     response = client.post(
-        "/api/convert", headers=headers, files={"files": ("sample.txt", b"sample")}
+        "/api/jobs", headers=headers, files={"files": ("sample.txt", b"sample")}
     )
     assert response.status_code == 403
 
@@ -47,7 +49,7 @@ def test_conversion_requires_custom_request_header(client, header_value):
 )
 def test_cross_origin_requests_are_rejected(client, request_headers, origin):
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers={**request_headers, "Origin": origin},
         files={"files": ("sample.txt", b"sample")},
     )
@@ -57,15 +59,15 @@ def test_cross_origin_requests_are_rejected(client, request_headers, origin):
 
 def test_matching_origin_is_allowed(client, request_headers, monkeypatch):
     monkeypatch.setattr(
-        app_module, "run_conversion", lambda path, suffix: ("sample", "<p>sample</p>")
+        jobs_module, "run_conversion", lambda path, suffix: ("sample", "<p>sample</p>")
     )
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers={**request_headers, "Origin": "http://127.0.0.1:8000"},
         files={"files": ("sample.txt", b"sample")},
     )
-    assert response.status_code == 200
-    assert response.json()["results"][0]["error"] is None
+    assert response.status_code == 202
+    assert wait_job(client, response.json()["jobs"][0])["status"] == "succeeded"
 
 
 @pytest.mark.parametrize(
@@ -102,7 +104,7 @@ def test_responses_have_defense_in_depth_headers(client, path):
 
 
 def test_rejected_uploads_are_not_cacheable(client):
-    response = client.post("/api/convert", files={"files": ("sample.txt", b"sample")})
+    response = client.post("/api/jobs", files={"files": ("sample.txt", b"sample")})
     assert response.status_code == 403
     assert "no-store" in response.headers.get("cache-control", "")
 
@@ -120,13 +122,14 @@ def test_response_filenames_cannot_traverse(
     client, request_headers, monkeypatch, filename
 ):
     monkeypatch.setattr(
-        app_module, "run_conversion", lambda path, suffix: ("sample", "<p>sample</p>")
+        jobs_module, "run_conversion", lambda path, suffix: ("sample", "<p>sample</p>")
     )
     response = client.post(
-        "/api/convert", headers=request_headers, files={"files": (filename, b"sample")}
+        "/api/jobs", headers=request_headers, files={"files": (filename, b"sample")}
     )
-    assert response.status_code == 200
-    result = response.json()["results"][0]
+    assert response.status_code == 202
+    result = wait_job(client, response.json()["jobs"][0])
+    assert result["status"] == "succeeded"
     assert result["error"] is None
     assert result["filename"] == "report.txt"
     assert "/" not in result["filename"]
@@ -150,12 +153,13 @@ def test_html_preview_cannot_execute_or_fetch_resources(client, request_headers)
 ![Data image](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)
 """
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers=request_headers,
         files={"files": ("untrusted.md", malicious_markdown)},
     )
-    assert response.status_code == 200
-    result = response.json()["results"][0]
+    assert response.status_code == 202
+    result = wait_job(client, response.json()["jobs"][0])
+    assert result["status"] == "succeeded"
     assert result["error"] is None
     # Markdown remains available for the user's plain-text download.
     assert "https://example.invalid/away" in result["markdown"]
@@ -185,7 +189,7 @@ def test_html_preview_cannot_execute_or_fetch_resources(client, request_headers)
 
 def test_oversized_content_length_is_rejected_before_reading(client, request_headers):
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers={
             **request_headers,
             "Content-Length": str(52 * MIB),
@@ -196,7 +200,9 @@ def test_oversized_content_length_is_rejected_before_reading(client, request_hea
     assert response.status_code == 413
 
 
-def test_chunked_upload_is_capped_without_content_length(monkeypatch):
+def test_chunked_upload_is_capped_without_content_length(
+    client, request_headers, monkeypatch
+):
     """Exercise ASGI receive directly so HTTPX cannot combine the input chunks."""
     parser_module = importlib.import_module("starlette.formparsers")
     original_spooled_file = parser_module.SpooledTemporaryFile
@@ -238,19 +244,26 @@ def test_chunked_upload_is_capped_without_content_length(monkeypatch):
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/api/convert",
-        "raw_path": b"/api/convert",
+        "path": "/api/jobs",
+        "raw_path": b"/api/jobs",
         "query_string": b"",
         "root_path": "",
         "headers": [
             (b"host", b"127.0.0.1:8000"),
             (b"x-markitdown-request", b"1"),
+            (b"x-csrf-token", request_headers["X-CSRF-Token"].encode()),
+            (
+                b"cookie",
+                "; ".join(
+                    f"{key}={value}" for key, value in client.cookies.items()
+                ).encode(),
+            ),
             (b"content-type", b"multipart/form-data; boundary=" + boundary),
         ],
         "client": ("127.0.0.1", 12345),
         "server": ("127.0.0.1", 8000),
     }
-    asyncio.run(app_module.app(scope, receive, send))
+    asyncio.run(client.app(scope, receive, send))
     responses = [
         message for message in observed if message["type"] == "http.response.start"
     ]
@@ -275,7 +288,7 @@ def test_chunked_upload_is_capped_without_content_length(monkeypatch):
 def test_filename_normalizer_removes_controls_and_unsafe_characters(filename):
     import unicodedata
 
-    sanitized = app_module.safe_filename(filename)
+    sanitized = state_module.safe_filename(filename)
     assert sanitized
     assert sanitized not in {".", ".."}
     assert not any(unicodedata.category(char).startswith("C") for char in sanitized)
@@ -283,14 +296,14 @@ def test_filename_normalizer_removes_controls_and_unsafe_characters(filename):
 
 
 def test_filename_normalizer_bounds_name_length():
-    sanitized = app_module.safe_filename("a" * 2000 + ".txt")
+    sanitized = state_module.safe_filename("a" * 2000 + ".txt")
     assert sanitized.endswith(".txt")
     assert len(sanitized) <= 180
 
 
 def test_forwarded_headers_do_not_bypass_local_origin_check(client, request_headers):
     response = client.post(
-        "/api/convert",
+        "/api/jobs",
         headers={
             **request_headers,
             "Origin": "https://evil.example",
@@ -300,3 +313,117 @@ def test_forwarded_headers_do_not_bypass_local_origin_check(client, request_head
         files={"files": ("sample.txt", b"sample")},
     )
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize("length", ["-1", "invalid", "1.5"])
+def test_invalid_content_lengths_are_rejected(client, request_headers, length):
+    response = client.post(
+        "/api/jobs", headers={**request_headers, "Content-Length": length}, content=b""
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/auth/login",
+        "/api/auth/register",
+        "/api/jobs/archive",
+        "/api/admin/invites",
+    ],
+)
+def test_nonupload_json_bodies_have_smaller_cap(client, request_headers, path):
+    response = client.post(
+        path,
+        headers={**request_headers, "Content-Type": "application/json"},
+        content=b'{"padding":"' + b"x" * (64 * 1024) + b'"}',
+    )
+    assert response.status_code == 413
+
+
+def test_chunked_json_body_is_capped_without_content_length(client, request_headers):
+    chunks = iter([b'{"job_ids":["', b"x" * (32 * 1024), b"x" * (33 * 1024), b'"]}'])
+    observed = []
+    reads = 0
+
+    async def receive():
+        nonlocal reads
+        try:
+            body = next(chunks)
+        except StopIteration:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        reads += 1
+        return {"type": "http.request", "body": body, "more_body": True}
+
+    async def send(message):
+        observed.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/api/jobs/archive",
+        "raw_path": b"/api/jobs/archive",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"127.0.0.1:8000"),
+            (b"x-markitdown-request", b"1"),
+            (b"x-csrf-token", request_headers["X-CSRF-Token"].encode()),
+            (
+                b"cookie",
+                "; ".join(
+                    f"{key}={value}" for key, value in client.cookies.items()
+                ).encode(),
+            ),
+            (b"content-type", b"application/json"),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 8000),
+    }
+    asyncio.run(client.app(scope, receive, send))
+    responses = [
+        message for message in observed if message["type"] == "http.response.start"
+    ]
+    assert len(responses) == 1
+    assert responses[0]["status"] == 413
+    assert reads == 3
+
+
+@pytest.mark.parametrize(
+    "method,path,payload",
+    [
+        (
+            "POST",
+            "/api/auth/login",
+            {"username": "some-user", "password": "Synthetic-password!"},
+        ),
+        (
+            "POST",
+            "/api/auth/register",
+            {
+                "username": "some-user",
+                "password": "Synthetic-password!",
+                "invite_token": "a" * 43,
+            },
+        ),
+        ("POST", "/api/auth/logout", None),
+        ("POST", "/api/admin/invites", {"ttl_hours": 24}),
+        ("DELETE", "/api/admin/invites/" + "a" * 32, None),
+        ("PATCH", "/api/admin/users/" + "a" * 32, {"daily_quota": 1}),
+    ],
+)
+def test_nonupload_mutations_enforce_marker_and_origin(
+    client, request_headers, method, path, payload
+):
+    csrf_only = {"X-CSRF-Token": request_headers["X-CSRF-Token"]}
+    assert (
+        client.request(method, path, headers=csrf_only, json=payload).status_code == 403
+    )
+    cross_origin = {**request_headers, "Origin": "https://evil.example"}
+    assert (
+        client.request(method, path, headers=cross_origin, json=payload).status_code
+        == 403
+    )

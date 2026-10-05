@@ -1,27 +1,111 @@
-"""Self-contained inputs for the local conversion API tests."""
+"""Isolated authenticated clients and synthetic real-format conversion inputs."""
 
 from __future__ import annotations
 
 import io
+import os
+import time
 import zipfile
 from xml.sax.saxutils import escape
 
 import pytest
 from fastapi.testclient import TestClient
 
-from markitdown_web.app import app
+# Set the ONNX opt-out before importing any application/conversion modules.
+os.environ["ORT_DISABLE_TELEMETRY"] = "1"
+
+from markitdown_web.app import create_app  # noqa: E402
+from markitdown_web.state import Settings  # noqa: E402
+
+BASE_URL = "http://127.0.0.1:8000"
+PASSWORD = "Synthetic-passphrase-123!"
+REQUEST_MARKER = {"X-MarkItDown-Request": "1"}
+
+
+def login(test_client, username, password=PASSWORD):
+    response = test_client.post(
+        "/api/auth/login",
+        headers=REQUEST_MARKER,
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def headers_for(test_client):
+    response = test_client.get("/api/me")
+    assert response.status_code == 200, response.text
+    return {**REQUEST_MARKER, "X-CSRF-Token": response.json()["csrf_token"]}
+
+
+def wait_job(test_client, job_or_id, timeout=10):
+    job_id = job_or_id["id"] if isinstance(job_or_id, dict) else job_or_id
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        response = test_client.get(f"/api/jobs/{job_id}")
+        assert response.status_code == 200, response.text
+        job = response.json()
+        if job["status"] in {"succeeded", "failed", "expired"}:
+            return job
+        time.sleep(0.02)
+    pytest.fail(f"Job {job_id} did not complete within {timeout}s: {job}")
 
 
 @pytest.fixture
-def client():
-    # The application intentionally rejects TestClient's default `testserver` host.
-    with TestClient(app, base_url="http://127.0.0.1:8000") as test_client:
+def web_app(tmp_path):
+    return create_app(Settings(data_dir=tmp_path, start_workers=True))
+
+
+@pytest.fixture
+def anonymous_client(web_app):
+    # Each test owns a fresh database, scheduler, and complete lifespan cleanup.
+    with TestClient(web_app, base_url=BASE_URL) as test_client:
         yield test_client
 
 
 @pytest.fixture
-def request_headers():
-    return {"X-MarkItDown-Request": "1"}
+def admin(web_app, anonymous_client):
+    return web_app.state.auth.bootstrap_admin("test-admin", PASSWORD)
+
+
+@pytest.fixture
+def test_user(web_app, admin):
+    invite = web_app.state.auth.create_invite(admin["id"])
+    return web_app.state.auth.register(
+        "test-user", PASSWORD, invite["token"], "127.0.0.1"
+    )
+
+
+@pytest.fixture
+def client(anonymous_client, test_user):
+    login(anonymous_client, test_user["username"])
+    return anonymous_client
+
+
+@pytest.fixture
+def admin_client(web_app, anonymous_client, admin):
+    # The anonymous_client fixture already owns this application's lifespan.
+    test_client = TestClient(web_app, base_url=BASE_URL)
+    login(test_client, admin["username"])
+    yield test_client
+    test_client.close()
+
+
+@pytest.fixture
+def other_client(web_app, anonymous_client, admin):
+    invite = web_app.state.auth.create_invite(admin["id"])
+    user = web_app.state.auth.register(
+        "other-user", PASSWORD, invite["token"], "127.0.0.1"
+    )
+    test_client = TestClient(web_app, base_url=BASE_URL)
+    login(test_client, user["username"])
+    yield test_client
+    test_client.close()
+
+
+@pytest.fixture
+def request_headers(client):
+    return headers_for(client)
 
 
 @pytest.fixture

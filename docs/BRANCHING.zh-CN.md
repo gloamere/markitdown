@@ -8,7 +8,7 @@
 - 首次上游基线：`4cc9fa17653d695d64fb9eee5b33d4de55ff84e8`
 - 基线提交：`Restore JSON regression coverage for late non-ASCII text (#2601)`
 - `main` 当前保留这份上游基线；它还不是已验收的 Web 产品，也没有进行线上部署
-- Web MVP 在 `dev` 开发，通过草稿 PR 供审阅；尚未批准合并到 `main`
+- 多用户 Web MVP 0.2 在 `dev` 开发，包含邀请注册、按用户隔离的持久化队列和限额；通过草稿 PR 供审阅，尚未批准合并到 `main`
 
 ## 约定
 
@@ -40,7 +40,7 @@ git push origin dev
 
 1. 提交 `dev → main` PR，审查功能、安全边界和依赖变更
 2. 运行 Web 检查、上游相关格式回归，并检查该提交的 CI 结果
-3. 对实际目标系统进行人工验收；公开部署需另行增加身份认证、HTTPS、请求限流、OS 级隔离及数据保留策略
+3. 对实际目标系统进行人工验收；公开部署需复核身份与权限、配置 HTTPS 和全局请求限流、补齐 OS 级解析隔离并确认数据保留策略（见 MULTIUSER-RELEASE.zh-CN.md）
 4. 获得明确发布/合并批准后，再将验收版本合并到 `main` 并标记版本
 
 建 PR 只代表提供审阅入口，不代表已批准生产发布。仓库保留上游 CI；本次新增 Web 检查通过 `scripts/check-web.sh` 执行。

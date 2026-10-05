@@ -6,4 +6,4 @@ import os
 # disable_telemetry_events() after import is too late for initialization events.
 os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
