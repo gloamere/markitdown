@@ -398,7 +398,10 @@
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(entry.markdown);
-      if (copyGeneration === generation && selectedId === id && entries.includes(entry)) announce("Markdown 已复制到剪贴板。");
+      if (copyGeneration === generation && selectedId === id && entries.includes(entry)) {
+        announce("Markdown 已复制到剪贴板。");
+        ui.outputLabel.textContent = "已复制到剪贴板";
+      }
     } catch {
       if (copyGeneration !== generation || selectedId !== id || !entries.includes(entry)) return;
       switchView("source");

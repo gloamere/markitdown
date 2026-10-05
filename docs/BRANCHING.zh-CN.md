@@ -47,4 +47,4 @@ git push origin dev
 
 ### 当前 CI 注意事项
 
-本次开发提交带 `[skip ci]`，不会声称 GitHub CI 已通过。原因是上游 workflow 未在 Python 启动前设置 ONNX Runtime 的遥测关闭变量，而当前授权不包含更新 GitHub Actions workflow 的权限。已在 Web 应用和本地检查脚本中关闭遥测，并实际完成本地检查。启用远程检查前，应先获授权为所有 Python 测试 job 设置 `ORT_DISABLE_TELEMETRY: "1"`，再补充 Web 检查 job、去掉 skip 标记并验证该提交的 CI。
+本次开发提交带 `[skip ci]`，不会声称 GitHub CI 已通过。原因是上游 workflow 未在 Python 启动前设置 ONNX Runtime 的遥测关闭变量，而当前 GitHub CLI 凭证不含 `workflow` 权限。已在 Web 应用和本地检查脚本中关闭遥测，并实际完成本地检查。启用远程检查前，应先获授权为所有 Python 测试 job 设置 `ORT_DISABLE_TELEMETRY: "1"`，再补充 Web 检查 job、去掉 skip 标记并验证该提交的 CI。

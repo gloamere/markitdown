@@ -66,7 +66,7 @@ curl -H 'X-MarkItDown-Request: 1' \
 bash scripts/check-web.sh
 ```
 
-覆盖 Ruff、Black、Mypy、Web API/安全/真实格式转换测试与相关上游 CSV/DOCX/XLSX/PDF 回归。有 Node 时另外检查 JavaScript 语法。完整上游多平台 CI、OCR/云服务和浏览器 UI 测试不等同于这组本地检查。
+覆盖 Ruff、Black、Mypy、Web API/安全/真实格式转换测试与相关上游 CSV/DOCX/XLSX/PDF 离线回归。明确排除上游 `test_markitdown_remote`（会向 arXiv 发起请求）；此 Web 产品不提供 URL 转换。有 Node 18+ 时另外检查 JavaScript 语法和 17 项模拟 DOM 状态测试（Node 24 验证通过）。模拟 DOM 不验证真实浏览器渲染、剪贴板权限或下载集成。完整上游多平台 CI、OCR/云服务和浏览器 UI 测试不等同于这组本地检查。
 
 更新依赖锁文件（在 Python 3.12 的项目环境中）：
 
