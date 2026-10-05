@@ -1,5 +1,7 @@
 # MarkItDown
 
+> **gloamere 二开版（dev）**：新增本机中文「资料工作台」，支持文档上传 → Markdown 预览 → 下载。参见 [Web 快速开始](packages/markitdown-web/README.md) 与 [dev / main 分支策略](docs/BRANCHING.zh-CN.md)。Web MVP 尚未合并至生产分支或部署；下方保留上游说明。
+
 [![PyPI](https://img.shields.io/pypi/v/markitdown.svg)](https://pypi.org/project/markitdown/)
 ![PyPI - Downloads](https://img.shields.io/pypi/dd/markitdown)
 

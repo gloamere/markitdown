@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="在本机将文档转换为清晰、可编辑的 Markdown。无需 AI，也不上传到第三方服务。">
+    <title>MarkItDown · 本地文档转换</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">跳到转换工作区</a>
+    <div class="app-shell">
+      <header class="site-header">
+        <a class="brand" href="/" aria-label="MarkItDown 首页">
+          <span class="brand-mark" aria-hidden="true">m<span>↓</span></span>
+          <span>MarkItDown<span class="brand-edition">LOCAL WORKSPACE</span></span>
+        </a>
+        <span class="local-badge"><span class="status-dot" aria-hidden="true"></span>仅在本机处理</span>
+      </header>
+
+      <main>
+        <section class="intro" aria-labelledby="page-title">
+          <div>
+            <p class="eyebrow">LESS FORMATTING. MORE CLARITY.</p>
+            <h1 id="page-title">文档，归于简洁<span>。</span></h1>
+            <p class="intro-copy">把文件转换为 Markdown，让内容更易阅读、编辑与复用。</p>
+          </div>
+          <div class="intro-note"><span aria-hidden="true">↘</span><p>保留内容结构<br>回到文字本身</p></div>
+        </section>
+
+        <div class="connection-notice" id="connection-notice" hidden>
+          <p id="connection-message"></p>
+          <button type="button" class="text-button" id="reconnect-button">重新连接</button>
+        </div>
+        <div class="notice" id="notice" role="alert" hidden></div>
+
+        <section class="workspace" id="workspace" aria-label="文档转换工作区">
+          <section class="panel input-panel" aria-labelledby="files-heading">
+            <div class="panel-header">
+              <h2 id="files-heading"><span class="step-number">01</span>添加文件</h2>
+              <button type="button" class="text-button" id="clear-button" disabled>清空</button>
+            </div>
+            <div class="input-body">
+              <div class="drop-zone" id="drop-zone">
+                <span class="upload-symbol" aria-hidden="true">↑</span>
+                <p class="drop-title">把文件拖到这里</p>
+                <p class="drop-subtitle">或从电脑中选择一个或多个文件</p>
+                <button type="button" class="choose-button" id="choose-button">选择文件<span aria-hidden="true">＋</span></button>
+                <input id="file-input" type="file" multiple accept=".pdf,.docx,.xlsx,.txt,.md,.csv,.json" aria-label="选择要转换的文件" hidden>
+                <p class="upload-limits" id="upload-limits">最多 10 个文件 · 单个 20 MiB · 总计 50 MiB</p>
+              </div>
+              <div class="format-list" aria-label="支持的文件格式" id="format-list">
+                <span>PDF</span><span>DOCX</span><span>XLSX</span><span>TXT</span><span>MD</span><span>CSV</span><span>JSON</span>
+              </div>
+              <p class="format-note">PDF 仅支持可选中文字的文档，扫描件不支持 OCR</p>
+
+              <div class="queue-heading"><h3>文件队列 <span id="queue-count">0</span></h3><span id="queue-size">0 B</span></div>
+              <div class="queue-empty" id="queue-empty"><span aria-hidden="true">▤</span><p>你的文件将在这里排好队</p></div>
+              <ul class="file-list" id="file-list" aria-label="待转换文件"></ul>
+            </div>
+            <div class="conversion-footer">
+              <button type="button" class="primary-button" id="convert-button" disabled><span id="convert-label">开始转换</span><span class="convert-arrow" aria-hidden="true">→</span></button>
+              <p id="conversion-summary" role="status" aria-live="polite" aria-atomic="true">正在连接本机服务…</p>
+            </div>
+          </section>
+
+          <section class="panel output-panel" aria-labelledby="output-heading">
+            <div class="panel-header output-header">
+              <h2 id="output-heading"><span class="step-number">02</span>Markdown</h2>
+              <span class="output-label" id="output-label">等待转换</span>
+            </div>
+            <div class="output-toolbar">
+              <div class="view-switch" role="tablist" aria-label="Markdown 显示方式">
+                <button type="button" id="preview-tab" role="tab" aria-selected="true" aria-controls="preview-panel" tabindex="0">预览</button>
+                <button type="button" id="source-tab" role="tab" aria-selected="false" aria-controls="source-panel" tabindex="-1">源码</button>
+              </div>
+              <div class="output-actions">
+                <button type="button" class="tool-button" id="copy-button" disabled><span aria-hidden="true">▣</span>复制</button>
+                <button type="button" class="tool-button" id="download-button" disabled><span aria-hidden="true">↓</span>下载 .md</button>
+              </div>
+            </div>
+            <div class="document-heading" id="document-heading" hidden><span id="document-name"></span><span id="document-length"></span></div>
+            <div class="output-content" id="output-content">
+              <div class="output-empty" id="output-empty">
+                <div class="paper-illustration" aria-hidden="true"><span>#</span><i></i><i></i><i></i></div>
+                <h3 id="empty-title">下一站，Markdown</h3>
+                <p id="empty-description">添加文件并开始转换<br>在这里预览结果，或查看 Markdown 源码</p>
+              </div>
+              <div id="preview-panel" class="document-panel" role="tabpanel" aria-labelledby="preview-tab" tabindex="0" hidden><article class="markdown-body" id="markdown-preview"></article></div>
+              <div id="source-panel" class="document-panel source-panel" role="tabpanel" aria-labelledby="source-tab" hidden><textarea class="markdown-source" id="markdown-source" aria-label="Markdown 源码" spellcheck="false" readonly></textarea></div>
+            </div>
+            <div class="output-footer"><span><span class="small-dot" aria-hidden="true"></span>内容只保留在当前页面</span><span>清空或刷新即可移除</span></div>
+          </section>
+        </section>
+
+        <footer class="site-footer"><p>基于 Microsoft MarkItDown · “本机”指运行服务的电脑</p><p>无需 AI <span aria-hidden="true">/</span> 无第三方上传 <span aria-hidden="true">/</span> 不保存转换记录</p></footer>
+      </main>
+    </div>
+    <p class="sr-only" id="action-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <noscript><p class="noscript">请启用 JavaScript，以使用本地文件转换功能。</p></noscript>
+  </body>
+</html>
