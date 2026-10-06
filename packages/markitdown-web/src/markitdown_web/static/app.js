@@ -6,9 +6,10 @@
     "auth-section", "session-section", "bootstrap-notice", "login-tab", "register-tab", "login-form", "register-form",
     "login-username", "login-password", "register-username", "register-password", "invite-token", "login-button", "register-button", "auth-message",
     "logout-button", "logout-retry", "account-name", "account-role", "quota-summary", "quota-reset", "connection-notice", "connection-message", "reconnect-button", "notice",
-    "file-input", "choose-button", "drop-zone", "clear-button", "convert-button", "convert-label", "file-list", "queue-empty", "queue-count", "queue-size", "conversion-summary", "upload-limits", "format-list",
-    "history-list", "history-count", "history-empty", "history-note", "refresh-button", "archive-button", "archive-count",
-    "preview-tab", "source-tab", "preview-panel", "source-panel", "markdown-preview", "markdown-source", "output-empty", "empty-title", "empty-description", "document-heading", "document-name", "document-length", "document-expiry", "output-label", "copy-button", "download-button", "action-status",
+    "file-input", "choose-button", "drop-zone", "clear-button", "convert-button", "convert-label", "file-list", "queue-empty", "queue-count", "queue-size", "conversion-summary", "upload-limits", "format-list", "format-note", "upload-progress", "upload-recheck", "workspace-status",
+    "engine-group", "engine-markitdown", "engine-docling", "engine-card-markitdown", "engine-card-docling", "engine-badge-markitdown", "engine-badge-docling", "engine-limit-markitdown", "engine-limit-docling", "engine-selection-note",
+    "history-list", "history-count", "history-empty", "history-note", "refresh-button", "archive-button", "archive-count", "filter-all", "filter-active", "filter-completed", "filter-failed",
+    "preview-tab", "source-tab", "split-tab", "preview-panel", "source-panel", "markdown-preview", "markdown-source", "output-content", "output-empty", "empty-title", "empty-description", "document-heading", "document-name", "document-length", "document-engine", "document-expiry", "document-progress", "document-reload", "document-retry", "document-cancel", "preview-safety", "output-label", "copy-button", "download-button", "action-status",
     "admin-toggle", "admin-panel", "admin-refresh", "admin-status", "invite-create", "invite-result", "new-invite-token", "invite-expiry", "invite-copy", "invite-dismiss", "invites-list", "users-list",
   ].map((id) => [id, $(id)]));
   const defaults = { max_files: 10, max_file_bytes: 20 * 1024 * 1024, max_total_bytes: 50 * 1024 * 1024, extensions: [".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv", ".json"] };
@@ -16,7 +17,8 @@
   let config = { ...defaults, has_admin: false }, ready = false, connecting = false, connectionSequence = 0;
   let session = null, usage = null, epoch = 0, authBusy = false, authMode = "login", logoutToken = null, logoutUserId = null, logoutBusy = false;
   let pending = [], nextFileId = 1, jobs = [], selectedId = null, selectedDocument = null, view = "preview", renderedDocument = null;
-  let uploadBusy = false, archiveBusy = false, jobsBusy = false, jobsSequence = 0, detailSequence = 0, detailLoading = false, detailError = "", detailController = null;
+  let uploadBusy = false, uploadUncertain = false, archiveBusy = false, jobsBusy = false, jobsSequence = 0, detailSequence = 0, detailLoading = false, detailError = "", detailController = null;
+  let selectedEngine = "markitdown", historyFilter = "all";
   let pollTimer = null, expiryTimer = null, dragDepth = 0, adminSequence = 0, adminBusy = false, inviteBusy = false, sessionRefreshBusy = false;
   const controllers = new Set(), objectUrls = new Set(), archiveIds = new Set(), jobMutations = new Set();
 
@@ -32,7 +34,20 @@
   function extension(name) { const i = name.lastIndexOf("."); return i < 0 ? "" : name.slice(i).toLowerCase(); }
   function status(job) { return job.expires_at && job.expires_at * 1000 <= Date.now() ? "expired" : job.status; }
   function selectedJob() { return jobs.find((job) => String(job.id) === selectedId); }
-  function fileLimit() { return Math.min(config.max_file_bytes, usage?.max_file_bytes || session?.user.max_file_bytes || config.max_file_bytes); }
+  function engineInfo(id = selectedEngine) {
+    const data = Array.isArray(config.engines) ? config.engines.find((engine) => engine.id === id) : null;
+    const enhanced = id === "docling";
+    return {
+      id, label: enhanced ? "Docling" : "MarkItDown", available: enhanced ? data?.available === true : data?.available !== false,
+      reason: typeof data?.reason === "string" ? data.reason : enhanced ? "此服务尚未启用 Docling，仍可使用默认引擎" : "默认引擎暂不可用，请联系管理员",
+      max_file_bytes: Number.isSafeInteger(data?.max_file_bytes) && data.max_file_bytes > 0 ? Math.min(data.max_file_bytes, enhanced ? 10 * 1048576 : config.max_file_bytes) : enhanced ? 10 * 1048576 : config.max_file_bytes,
+      max_pages: Number.isSafeInteger(data?.max_pages) && data.max_pages > 0 ? enhanced ? Math.min(data.max_pages, 2) : data.max_pages : enhanced ? 2 : null,
+      timeout_seconds: Number.isSafeInteger(data?.timeout_seconds) && data.timeout_seconds > 0 ? data.timeout_seconds : enhanced ? 60 : 45,
+    };
+  }
+  function fileLimit() { return Math.min(config.max_file_bytes, usage?.max_file_bytes || session?.user.max_file_bytes || config.max_file_bytes, engineInfo().max_file_bytes); }
+  function jobStatusName(job) { return status(job) === "failed" && job.error === "任务已取消" ? "已取消" : statusNames[status(job)] || "未知状态"; }
+  function isActive(job) { return ["queued", "running"].includes(status(job)); }
   function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
   function actionButton(action, id, text, label, disabled = false) { const node = element("button", "file-action", text); node.type = "button"; node.dataset.action = action; node.dataset.id = String(id); node.setAttribute("aria-label", label); node.disabled = disabled; return node; }
   function revokeUrls() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); }
@@ -76,7 +91,8 @@
     clearTimeout(pollTimer); clearTimeout(expiryTimer); pollTimer = expiryTimer = null;
     revokeUrls(); session = usage = null; pending = []; jobs = []; archiveIds.clear(); jobMutations.clear();
     selectedId = null; selectedDocument = renderedDocument = null; detailError = ""; detailLoading = false;
-    uploadBusy = archiveBusy = jobsBusy = authBusy = adminBusy = inviteBusy = sessionRefreshBusy = false;
+    uploadBusy = uploadUncertain = archiveBusy = jobsBusy = authBusy = adminBusy = inviteBusy = sessionRefreshBusy = false;
+    selectedEngine = "markitdown"; historyFilter = "all";
     logoutToken = logoutUserId = null; logoutBusy = false; dragDepth = 0; view = "preview";
     ui["file-input"].value = "";
     for (const id of ["login-username", "login-password", "register-username", "register-password", "invite-token"]) ui[id].value = "";
@@ -114,7 +130,7 @@
     for (const entry of pending) {
       const row = element("li", "file-item"); row.dataset.state = entry.error ? "error" : "queued";
       const details = element("div", "file-select"); const text = element("div", "file-details");
-      text.append(element("span", "file-name", entry.file.name), element("span", "file-meta", bytes(entry.file.size)));
+      text.append(element("span", "file-name", entry.file.name), element("span", "file-meta", `${bytes(entry.file.size)} · ${entry.error ? "请检查" : uploadBusy ? "上传中" : "待上传"}`));
       if (entry.error) text.append(element("span", "file-error", entry.error));
       details.append(element("span", "file-icon", extension(entry.file.name).slice(1).toUpperCase().slice(0, 4) || "FILE"), text);
       row.append(details, actionButton("remove", entry.id, "×", `移除待上传文件 ${entry.file.name}`, uploadBusy)); fragment.append(row);
@@ -124,35 +140,65 @@
     const unavailable = !session || !ready || uploadBusy;
     ui["choose-button"].disabled = unavailable; ui["file-input"].disabled = unavailable;
     ui["clear-button"].disabled = uploadBusy || !pending.length;
-    ui["convert-button"].disabled = unavailable || !pending.some((entry) => !entry.error) || usage?.remaining === 0;
+    ui["convert-button"].disabled = unavailable || uploadUncertain || !engineInfo().available || !pending.some((entry) => !entry.error) || usage?.remaining === 0;
     ui["convert-button"].classList.toggle("is-busy", uploadBusy); ui["drop-zone"].classList.toggle("is-busy", unavailable);
     ui["convert-label"].textContent = uploadBusy ? "正在上传…" : "上传并转换";
     ui["file-list"].setAttribute("aria-busy", String(uploadBusy));
-    ui["conversion-summary"].textContent = uploadBusy ? "上传完成后可在转换记录中查看进度" : usage?.remaining === 0 ? "今日额度已用完，请等待 UTC 重置" : "上传与重试进入队列后，均计入当日额度";
+    ui["drop-zone"].setAttribute("aria-disabled", String(unavailable));
+    ui["upload-progress"].hidden = !uploadBusy; ui["upload-recheck"].hidden = !uploadUncertain;
+    ui["conversion-summary"].textContent = uploadBusy ? "正在等待服务接收，完成后自动进入转换记录" : uploadUncertain ? "上传结果尚未确认，请先刷新并核对记录，避免重复消耗额度" : usage?.remaining === 0 ? "今日额度已用完，请等待 UTC 重置" : "上传与重试进入队列后，均计入当日额度";
     ui["upload-limits"].textContent = `最多 ${config.max_files} 个文件 · 单个 ${bytes(fileLimit())} · 总计 ${bytes(config.max_total_bytes)}`;
+  }
+
+  function renderEngines() {
+    const selected = engineInfo();
+    for (const id of ["markitdown", "docling"]) {
+      const info = engineInfo(id), input = ui[`engine-${id}`];
+      input.checked = selectedEngine === id; input.disabled = !session || !ready || uploadBusy || !info.available;
+      ui[`engine-card-${id}`].classList.toggle("is-selected", selectedEngine === id);
+      ui[`engine-card-${id}`].classList.toggle("is-unavailable", !info.available);
+      ui[`engine-badge-${id}`].textContent = !info.available ? "未启用" : id === "markitdown" ? "默认" : "可用";
+      ui[`engine-limit-${id}`].textContent = id === "docling" ? `仅文字型 PDF · 最多 ${info.max_pages} 页 / ${bytes(info.max_file_bytes)} · 最长 ${info.timeout_seconds} 秒 · OCR 关闭${info.available ? "" : `\n${info.reason}`}` : `多种格式 · 最长 ${info.timeout_seconds} 秒 · 复杂版式可能简化${info.available ? "" : `\n${info.reason}`}`;
+    }
+    ui["engine-group"].setAttribute("aria-busy", String(uploadBusy));
+    ui["engine-selection-note"].textContent = !selected.available ? selected.reason : selectedEngine === "docling" ? `此批全部使用 Docling；超出 ${selected.max_pages} 页会拒绝处理。全局一次运行 1 项，模型流水线最多 30 秒。扫描件请先添加文字层。` : "此批全部使用 MarkItDown；之后重试会沿用任务原来的引擎。";
+    const extensions = selectedEngine === "docling" ? config.extensions.filter((value) => value === ".pdf") : config.extensions;
+    ui["file-input"].accept = extensions.join(",");
+    ui["format-list"].replaceChildren(...extensions.map((value) => element("span", "", value.slice(1).toUpperCase())));
+    ui["format-note"].textContent = selectedEngine === "docling" ? "文字型 PDF 增强 · 页数由服务在入队前检查 · 不支持 URL 上传" : "PDF 需要文字层，不支持扫描件 OCR · 不支持 URL 上传";
   }
 
   function renderHistory() {
     const fragment = document.createDocumentFragment();
+    let visible = 0;
     for (const job of jobs) {
       const state = status(job), id = String(job.id), changing = jobMutations.has(id);
       if (state !== "succeeded") archiveIds.delete(id);
+      if (historyFilter === "active" && !isActive(job) || historyFilter === "completed" && state !== "succeeded" || historyFilter === "failed" && !["failed", "expired"].includes(state)) continue;
+      visible += 1;
       const row = element("li", "file-item"); row.dataset.state = state; row.classList.toggle("is-selected", selectedId === id);
       const checkbox = element("input"); checkbox.type = "checkbox"; checkbox.checked = archiveIds.has(id); checkbox.dataset.action = "archive"; checkbox.dataset.id = id;
       checkbox.disabled = state !== "succeeded" || changing || archiveBusy; checkbox.setAttribute("aria-label", `将 ${job.filename} 加入 ZIP 下载`);
-      const select = actionButton("select", id, "", `查看 ${job.filename}，${statusNames[state]}`); select.className = "file-select"; select.setAttribute("aria-pressed", String(selectedId === id));
+      const select = actionButton("select", id, "", `查看 ${job.filename}，${jobStatusName(job)}`); select.className = "file-select"; select.setAttribute("aria-pressed", String(selectedId === id));
       const details = element("span", "file-details"); const meta = element("span", "file-meta");
-      meta.append(element("span", "", bytes(job.size_bytes || 0)), element("span", "file-state", statusNames[state] || "未知状态"));
+      meta.append(element("span", "", bytes(job.size_bytes || 0)), element("span", "engine-chip", engineInfo(job.engine || "markitdown").label), element("span", "file-state", jobStatusName(job)));
       details.append(element("span", "file-name", job.filename), meta, element("span", "file-meta", state === "expired" ? "文件已到期，不再提供下载" : `${utc(job.expires_at)} 到期`));
       if (job.error && state === "failed") details.append(element("span", "file-error", job.error));
       select.append(element("span", "file-icon", extension(job.filename).slice(1).toUpperCase().slice(0, 4) || "FILE"), details);
       row.append(checkbox, select);
       const actions = element("div", "history-actions");
+      if (isActive(job)) actions.append(actionButton("cancel", id, changing ? "正在取消…" : "取消任务", `取消 ${job.filename}，已用额度不退还`, changing));
       if (state === "failed") actions.append(actionButton("retry", id, job.attempts >= 3 ? "重试次数已用完" : "重试", `重试 ${job.filename}，计入当日额度`, changing || job.attempts >= 3 || usage?.remaining === 0));
       actions.append(actionButton("delete", id, changing ? "处理中…" : "删除", `删除 ${job.filename} 及其文件`, changing)); row.append(actions); fragment.append(row);
     }
-    ui["history-list"].replaceChildren(fragment); ui["history-empty"].hidden = jobs.length > 0;
+    ui["history-list"].replaceChildren(fragment); ui["history-empty"].hidden = visible > 0;
+    ui["history-empty"].textContent = !jobs.length ? jobsBusy ? "正在读取转换记录…" : "还没有转换记录，添加第一个文件吧" : "此分类暂时没有记录";
     ui["history-count"].textContent = String(jobs.length); ui["refresh-button"].disabled = jobsBusy;
+    ui["refresh-button"].textContent = jobsBusy ? "刷新中…" : "刷新";
+    ui["history-list"].setAttribute("aria-busy", String(jobsBusy));
+    const active = jobs.filter(isActive).length, done = jobs.filter((job) => status(job) === "succeeded").length, failed = jobs.filter((job) => ["failed", "expired"].includes(status(job))).length;
+    ui["workspace-status"].textContent = jobs.length ? `${active} 项处理中 · ${done} 项已完成${failed ? ` · ${failed} 项需处理` : ""}` : "添加文件，开始整理";
+    for (const [id, label, count] of [["all", "全部", jobs.length], ["active", "处理中", active], ["completed", "已完成", done], ["failed", "需处理", failed]]) { ui[`filter-${id}`].textContent = `${label} ${count}`; ui[`filter-${id}`].setAttribute("aria-pressed", String(historyFilter === id)); }
     ui["archive-button"].disabled = !archiveIds.size || archiveBusy; ui["archive-button"].textContent = archiveBusy ? "正在打包…" : "下载 ZIP";
     ui["archive-count"].textContent = archiveIds.size ? `已选择 ${archiveIds.size} / 10 个文件` : "勾选已完成文件，最多 10 个";
   }
@@ -161,13 +207,29 @@
     const job = selectedJob(), state = job ? status(job) : null;
     const done = state === "succeeded" && selectedDocument && String(selectedDocument.id) === selectedId;
     const hasText = done && selectedDocument.markdown.length > 0;
+    const changing = jobMutations.has(selectedId), active = job && isActive(job);
     ui["copy-button"].disabled = !done; ui["download-button"].disabled = !done;
     ui["document-heading"].hidden = !job; ui["document-name"].textContent = job?.filename || "";
     ui["document-length"].textContent = done ? `${selectedDocument.markdown.length.toLocaleString("zh-CN")} 字符` : "";
+    const metadata = selectedDocument?.metadata || job?.metadata || {};
+    ui["document-engine"].textContent = job ? `${engineInfo(job.engine || "markitdown").label}${Number.isSafeInteger(metadata.page_count) && metadata.page_count > 0 ? ` · ${metadata.page_count} 页` : ""}` : "";
     ui["document-expiry"].textContent = job ? `${utc(job.expires_at)} 到期` : "请及时下载需要保留的内容";
-    ui["output-label"].textContent = detailLoading ? "正在读取" : statusNames[state] || "等待选择";
-    ui["output-empty"].hidden = !!hasText; ui["preview-panel"].hidden = !hasText || view !== "preview"; ui["source-panel"].hidden = !hasText || view !== "source";
-    for (const mode of ["preview", "source"]) { ui[`${mode}-tab`].setAttribute("aria-selected", String(view === mode)); ui[`${mode}-tab`].tabIndex = view === mode ? 0 : -1; }
+    ui["output-label"].textContent = detailLoading ? "正在读取" : job ? jobStatusName(job) : "等待选择";
+    ui["output-label"].dataset.state = state || "empty";
+    ui["output-empty"].hidden = !!hasText; ui["preview-panel"].hidden = !hasText || view === "source"; ui["source-panel"].hidden = !hasText || view === "preview";
+    ui["output-content"].classList.toggle("is-split", view === "split" && !!hasText);
+    ui["output-content"].setAttribute("aria-busy", String(detailLoading || !!active));
+    ui["preview-panel"].setAttribute("aria-labelledby", view === "split" ? "split-tab" : "preview-tab");
+    ui["source-panel"].setAttribute("aria-labelledby", view === "split" ? "split-tab" : "source-tab");
+    ui["document-progress"].hidden = !detailLoading && !active;
+    ui["preview-safety"].hidden = !done;
+    ui["document-reload"].hidden = !detailError || state !== "succeeded";
+    ui["document-retry"].hidden = state !== "failed";
+    ui["document-retry"].disabled = changing || job?.attempts >= 3 || usage?.remaining === 0;
+    ui["document-retry"].textContent = job?.attempts >= 3 ? "重试次数已用完" : usage?.remaining === 0 ? "今日额度已用完" : "重试转换 · 使用一次额度";
+    ui["document-cancel"].hidden = !active; ui["document-cancel"].disabled = changing;
+    ui["document-cancel"].textContent = changing ? "正在取消…" : "取消此任务";
+    for (const mode of ["preview", "source", "split"]) { ui[`${mode}-tab`].setAttribute("aria-selected", String(view === mode)); ui[`${mode}-tab`].tabIndex = view === mode ? 0 : -1; }
     if (done && renderedDocument !== selectedDocument) {
       // This is the only HTML insertion: the authenticated API sanitizes preview HTML.
       ui["markdown-preview"].innerHTML = selectedDocument.html;
@@ -176,8 +238,8 @@
     let title = "下一站，Markdown", description = "上传文件，或选择一条转换记录\n在这里预览结果，或查看 Markdown 源码";
     if (detailLoading) { title = "正在读取结果…"; description = "正在加载你的转换内容"; }
     else if (state === "expired") { title = "文件已过期"; description = "原文件与结果从上传起保留 24 小时\n如需再次转换，请重新上传文件"; }
-    else if (state === "failed") { title = "这个文件暂时无法转换"; description = job.error || "可在转换记录中重试"; }
-    else if (state === "queued" || state === "running") { title = state === "queued" ? "已加入转换队列" : "正在整理文字…"; description = "服务会自动更新进度\n你也可以离开页面，稍后登录查看"; }
+    else if (state === "failed") { title = job.error === "任务已取消" ? "任务已取消" : "这个文件暂时无法转换"; description = job.error === "任务已取消" ? "文件与记录仍保留，已用额度不退还\n停止中的任务需稍等片刻再重试" : job.error || "可在转换记录中重试"; }
+    else if (active) { title = state === "queued" ? "已加入转换队列" : "正在整理文字…"; description = state === "queued" ? "正在等待可用的转换资源，状态会自动更新\n已接收的任务可在离开页面后继续处理" : "转换进度暂不可精确计算，状态会自动更新\n你可以继续添加文件，或稍后回来查看"; }
     else if (detailError) { title = "结果暂时无法读取"; description = `${detailError}\n选择这条记录可重新读取`; }
     else if (done && !hasText) { title = "没有可预览的文字"; description = "转换已完成，但结果为空\n请确认文档包含可提取的文字"; }
     ui["empty-title"].textContent = title; ui["empty-description"].textContent = description;
@@ -185,10 +247,14 @@
 
   function render() {
     const active = document.activeElement, focusedAction = active?.dataset.action, focusedId = active?.dataset.id;
-    renderAuth(); renderQueue(); renderHistory(); renderDocument();
+    renderAuth(); renderEngines(); renderQueue(); renderHistory(); renderDocument();
     if (focusedAction && focusedId) {
       const replacement = [...ui["history-list"].querySelectorAll("[data-action]"), ...ui["file-list"].querySelectorAll("[data-action]")].find((node) => node.dataset.action === focusedAction && node.dataset.id === focusedId);
       if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true });
+      else if (!replacement && session) {
+        const fallback = focusedAction === "remove" ? ui["choose-button"] : ui["history-list"].querySelector('[data-action="select"]') || ui["refresh-button"];
+        if (!fallback.disabled) fallback.focus({ preventScroll: true });
+      }
     }
   }
 
@@ -202,7 +268,7 @@
 
   function clearDocument() { detailSequence += 1; detailController?.abort(); detailController = null; selectedDocument = null; detailLoading = false; detailError = ""; }
   async function selectJob(id) {
-    clearDocument(); selectedId = String(id); const job = selectedJob(); render();
+    clearDocument(); selectedId = String(id); const job = selectedJob(); ui["copy-button"].textContent = "复制"; render();
     if (!session || !job || status(job) !== "succeeded") return;
     const seq = detailSequence, currentEpoch = epoch;
     detailController = new AbortController(); detailLoading = true; renderDocument();
@@ -236,8 +302,9 @@
   function validatePending() {
     let total = 0;
     for (const entry of pending) {
-      const file = entry.file; entry.error = "";
+      const file = entry.file; entry.error = entry.serverError || "";
       if (!config.extensions.includes(extension(file.name))) entry.error = "暂不支持此文件格式";
+      else if (selectedEngine === "docling" && extension(file.name) !== ".pdf") entry.error = "Docling 仅支持 PDF；可切换 MarkItDown";
       else if (!file.size) entry.error = "文件为空，请选择包含内容的文件";
       else if (file.size > fileLimit()) entry.error = `单文件不能超过 ${bytes(fileLimit())}`;
       else if (total + file.size > config.max_total_bytes) entry.error = `本批文件总计不能超过 ${bytes(config.max_total_bytes)}`;
@@ -252,42 +319,50 @@
       if (pending.some((entry) => entry.file.name === file.name && entry.file.size === file.size && entry.file.lastModified === file.lastModified)) { warnings.push(`已跳过重复文件：${file.name}`); continue; }
       pending.push({ id: nextFileId++, file, error: "" });
     }
-    validatePending(); ui["file-input"].value = ""; notice(warnings.join("\n")); render();
+    validatePending(); ui["file-input"].value = ""; notice(warnings.join("\n")); announce(`待上传 ${pending.length} 个文件`); render();
   }
   async function upload() {
-    if (!session || uploadBusy || !ready) return;
+    if (!session || uploadBusy || uploadUncertain || !ready || !engineInfo().available) return;
     validatePending(); const entries = pending.filter((entry) => !entry.error); if (!entries.length) { render(); return; }
     if (usage && entries.length > usage.remaining) { notice(`今日还可上传 ${usage.remaining} 个文件，请减少待上传文件。`); return; }
     const currentEpoch = epoch; uploadBusy = true; jobsSequence += 1; jobsBusy = false; clearTimeout(pollTimer); notice(""); render();
-    const form = new FormData(); for (const entry of entries) form.append("files", entry.file);
+    const form = new FormData(); form.append("engine", selectedEngine); for (const entry of entries) form.append("files", entry.file);
     try {
       const data = await request("/api/jobs", { method: "POST", body: form });
       if (!Array.isArray(data.jobs) || !Array.isArray(data.errors)) throw new Error("上传响应不完整。请先刷新记录确认是否已接收，再重新上传，避免重复计入额度。");
       jobsSequence += 1; jobsBusy = false;
-      const ids = new Set(entries.map((entry) => entry.id)); pending = pending.filter((entry) => !ids.has(entry.id));
+      const ids = new Set(entries.map((entry) => entry.id));
+      pending = pending.filter((entry) => {
+        if (!ids.has(entry.id)) return true;
+        const rejected = data.errors.find((error) => error.filename === entry.file.name);
+        if (!rejected) return false;
+        entry.serverError = typeof rejected.error === "string" ? rejected.error : "文件未被服务接收"; entry.error = entry.serverError; return true;
+      });
       jobs = [...data.jobs, ...jobs.filter((job) => !data.jobs.some((added) => String(added.id) === String(job.id)))].slice(0, 100);
-      if (data.jobs.length) { selectedId = String(data.jobs[0].id); clearDocument(); announce(`${data.jobs.length} 个文件已加入转换队列`); }
+      if (data.jobs.length) { selectedId = String(data.jobs[0].id); historyFilter = "all"; clearDocument(); announce(`${data.jobs.length} 个文件已加入转换队列`); }
       if (data.errors.length) notice(data.errors.map((entry) => `${entry.filename}：${entry.error}`).join("\n"));
       await refreshJobs();
-    } catch (error) { if (!stale(error) && epoch === currentEpoch) { notice(message(error)); void refreshJobs(); } }
+    } catch (error) { if (!stale(error) && epoch === currentEpoch) { uploadUncertain = !error.status || error.status >= 500; notice(`${message(error)}${uploadUncertain ? "\n上传结果尚未确认。请先刷新并核对转换记录，确认没有接收后再重新上传。" : ""}`); void refreshJobs(); } }
     finally { if (epoch === currentEpoch) { uploadBusy = false; render(); scheduleTimers(); } }
   }
 
   async function mutateJob(action, id) {
-    if (!session || jobMutations.has(id)) return;
+    if (!session || jobMutations.has(id) || !["retry", "cancel", "delete"].includes(action)) return;
     const job = jobs.find((item) => String(item.id) === id); if (!job) return;
     if (action === "retry" && (status(job) !== "failed" || job.attempts >= 3 || usage?.remaining === 0)) return;
+    if (action === "cancel" && !isActive(job)) return;
     if (action === "delete" && !window.confirm(`删除「${job.filename}」？原文件、转换结果和记录将立即删除，无法恢复。`)) return;
     const currentEpoch = epoch; jobMutations.add(id); jobsSequence += 1; jobsBusy = false; clearTimeout(pollTimer); render(); notice("");
     try {
-      const data = await request(`/api/jobs/${encodeURIComponent(id)}${action === "retry" ? "/retry" : ""}`, { method: action === "retry" ? "POST" : "DELETE" });
+      const data = await request(`/api/jobs/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST" });
       jobsSequence += 1; jobsBusy = false;
       if (action === "delete") {
         jobs = jobs.filter((item) => String(item.id) !== id); archiveIds.delete(id);
         if (selectedId === id) { selectedId = null; clearDocument(); }
         announce("已删除文件与记录");
       } else {
-        jobs = jobs.map((item) => String(item.id) === id ? data : item); selectedId = id; clearDocument(); announce("已重新加入转换队列");
+        if (String(data.id) !== id || !Object.hasOwn(statusNames, data.status)) throw new Error("任务响应不完整，请刷新记录确认状态。");
+        jobs = jobs.map((item) => String(item.id) === id ? data : item); selectedId = id; clearDocument(); announce(action === "cancel" ? "任务已取消，已用额度不退还" : "已重新加入转换队列");
       }
       await refreshJobs();
     } catch (error) { if (!stale(error) && epoch === currentEpoch) { notice(message(error)); void refreshJobs(); } }
@@ -373,8 +448,8 @@
       const extensions = [...new Set(data.extensions.filter((value) => typeof value === "string").map((value) => `${value.startsWith(".") ? "" : "."}${value.toLowerCase()}`))].filter((value) => defaults.extensions.includes(value));
       if (!extensions.length) throw new Error("服务没有可用的文件格式。");
       config = { ...data, extensions, max_files: Math.min(data.max_files, defaults.max_files), max_file_bytes: Math.min(data.max_file_bytes, defaults.max_file_bytes), max_total_bytes: Math.min(data.max_total_bytes, defaults.max_total_bytes) };
-      ready = true; ui["connection-notice"].hidden = true; ui["file-input"].accept = extensions.join(",");
-      ui["format-list"].replaceChildren(...extensions.map((value) => element("span", "", value.slice(1).toUpperCase())));
+      if (!engineInfo().available) selectedEngine = "markitdown";
+      ready = true; ui["connection-notice"].hidden = true;
       if (!session && logoutToken === null && config.has_admin) {
         try { establishSession(await request("/api/me", { auth: false })); }
         catch (error) { if (!stale(error) && error.status !== 401) authMessage(message(error), true); else if (error.status === 401) authMessage("欢迎回来，登录后继续整理资料。"); }
@@ -462,16 +537,31 @@
   for (const mode of ["login", "register"]) ui[`${mode}-tab`].addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const next = event.key === "Home" ? "login" : event.key === "End" ? "register" : mode === "login" ? "register" : "login"; setAuthMode(next); ui[`${next}-tab`].focus(); });
   ui["logout-button"].addEventListener("click", logout); ui["logout-retry"].addEventListener("click", finishLogout); ui["reconnect-button"].addEventListener("click", connect);
   ui["choose-button"].addEventListener("click", () => ui["file-input"].click()); ui["file-input"].addEventListener("change", () => addFiles(Array.from(ui["file-input"].files || [])));
-  ui["clear-button"].addEventListener("click", () => { if (uploadBusy) return; pending = []; ui["file-input"].value = ""; notice(""); render(); });
+  ui["clear-button"].addEventListener("click", () => { if (uploadBusy) return; pending = []; uploadUncertain = false; ui["file-input"].value = ""; notice(""); render(); announce("已清空待上传文件"); });
+  for (const id of ["markitdown", "docling"]) ui[`engine-${id}`].addEventListener("change", () => {
+    if (!session || !ready || uploadBusy || !engineInfo(id).available) { renderEngines(); return; }
+    selectedEngine = id; for (const entry of pending) entry.serverError = ""; validatePending(); notice(""); render();
+  });
+  ui["upload-recheck"].addEventListener("click", () => { if (!session || uploadBusy) return; uploadUncertain = false; notice(""); renderQueue(); });
+  for (const filter of ["all", "active", "completed", "failed"]) ui[`filter-${filter}`].addEventListener("click", () => { historyFilter = filter; renderHistory(); });
   ui["convert-button"].addEventListener("click", upload); ui["refresh-button"].addEventListener("click", refreshJobs); ui["archive-button"].addEventListener("click", archive);
-  ui["file-list"].addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (!button || uploadBusy) return; pending = pending.filter((entry) => String(entry.id) !== button.dataset.id); validatePending(); render(); });
+  ui["file-list"].addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (!button || uploadBusy) return; pending = pending.filter((entry) => String(entry.id) !== button.dataset.id); if (!pending.length) uploadUncertain = false; validatePending(); render(); });
   ui["history-list"].addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (!button || button.disabled) return; const { action, id } = button.dataset; if (action === "select") void selectJob(id); else void mutateJob(action, id); });
-  ui["history-list"].addEventListener("change", (event) => { const input = event.target; if (input.dataset.action !== "archive" || input.disabled) return; if (input.checked && archiveIds.size >= 10) { input.checked = false; notice("ZIP 每次最多选择 10 个文件。"); } else if (input.checked) archiveIds.add(input.dataset.id); else archiveIds.delete(input.dataset.id); renderHistory(); });
-  for (const mode of ["preview", "source"]) {
+  ui["history-list"].addEventListener("change", (event) => { const input = event.target; if (input.dataset.action !== "archive" || input.disabled) return; if (input.checked && archiveIds.size >= 10) { input.checked = false; notice("ZIP 每次最多选择 10 个文件。"); } else if (input.checked) archiveIds.add(input.dataset.id); else archiveIds.delete(input.dataset.id); render(); });
+  const views = ["preview", "source", "split"];
+  for (const mode of views) {
     ui[`${mode}-tab`].addEventListener("click", () => { view = mode; renderDocument(); });
-    ui[`${mode}-tab`].addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); view = event.key === "Home" ? "preview" : event.key === "End" ? "source" : view === "preview" ? "source" : "preview"; renderDocument(); ui[`${view}-tab`].focus(); });
+    ui[`${mode}-tab`].addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); view = event.key === "Home" ? views[0] : event.key === "End" ? views[views.length - 1] : views[(views.indexOf(mode) + (event.key === "ArrowRight" ? 1 : views.length - 1)) % views.length]; renderDocument(); ui[`${view}-tab`].focus(); });
   }
-  ui["copy-button"].addEventListener("click", () => { if (selectedDocument && status(selectedJob()) === "succeeded") void copy(selectedDocument.markdown, "Markdown 已复制"); });
+  ui["copy-button"].addEventListener("click", async () => {
+    const job = selectedJob(), currentEpoch = epoch, id = selectedId;
+    if (!selectedDocument || !job || status(job) !== "succeeded") return;
+    try { await navigator.clipboard.writeText(selectedDocument.markdown); if (epoch === currentEpoch && selectedId === id) { ui["copy-button"].textContent = "已复制 ✓"; announce("Markdown 已复制"); } }
+    catch { if (epoch === currentEpoch) notice("浏览器未允许复制。请切换源码，手动选择并复制。"); }
+  });
+  ui["document-reload"].addEventListener("click", () => { if (selectedId && !detailLoading) void selectJob(selectedId); });
+  ui["document-retry"].addEventListener("click", () => { if (selectedId) void mutateJob("retry", selectedId); });
+  ui["document-cancel"].addEventListener("click", () => { if (selectedId) void mutateJob("cancel", selectedId); });
   ui["download-button"].addEventListener("click", () => { const job = selectedJob(); if (job && selectedDocument && status(job) === "succeeded") downloadLink(`/api/jobs/${encodeURIComponent(job.id)}/download`, ""); });
   ui["drop-zone"].addEventListener("dragenter", (event) => { event.preventDefault(); if (!session || uploadBusy) return; dragDepth += 1; ui["drop-zone"].classList.add("drag-over"); });
   ui["drop-zone"].addEventListener("dragover", (event) => event.preventDefault());

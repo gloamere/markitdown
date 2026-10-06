@@ -8,7 +8,9 @@ one data directory. Conversion subprocesses retain their existing resource limit
 from __future__ import annotations
 
 import io
+import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -30,6 +32,11 @@ from .conversion import (
     MAX_MARKDOWN_BYTES,
     ConversionError,
     run_conversion,
+)
+from .engines import (
+    ensure_engine_available,
+    run_docling_conversion,
+    validate_engine_uploads,
 )
 
 EXTENSIONS = frozenset({".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv", ".json"})
@@ -75,6 +82,7 @@ class JobService:
         self._lifecycle = threading.RLock()
         self._active_lock = threading.Lock()
         self._inflight: dict[str, str] = {}
+        self._inflight_engines: dict[str, str] = {}
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -96,7 +104,9 @@ class JobService:
                     expires_at REAL NOT NULL,
                     started_at REAL,
                     finished_at REAL,
-                    error TEXT
+                    error TEXT,
+                    engine TEXT NOT NULL DEFAULT 'markitdown',
+                    metadata TEXT NOT NULL DEFAULT '{}'
                 );
                 CREATE INDEX IF NOT EXISTS jobs_user_created ON jobs(user_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs(status, created_at);
@@ -109,6 +119,21 @@ class JobService:
                 );
                 """
             )
+
+        # Additive migration preserves job IDs, ownership, status constraints and
+        # all existing auth/quota data. Serialize concurrent service initialization.
+        with self.db.transaction() as connection:
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(jobs)")
+            }
+            if "engine" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN engine TEXT NOT NULL DEFAULT 'markitdown'"
+                )
+            if "metadata" not in columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"
+                )
 
     @staticmethod
     def _private_directory(path: Path) -> None:
@@ -197,6 +222,58 @@ class JobService:
             return False
 
     @staticmethod
+    def _safe_metadata(value: Any) -> dict[str, Any]:
+        # Never persist/return arbitrary worker fields (paths, source content, or
+        # environment details). The small allowlist is also applied on DB reads.
+        if isinstance(value, str):
+            if len(value) > 4096:
+                return {}
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError, RecursionError):
+                return {}
+        if not isinstance(value, dict):
+            return {}
+        safe: dict[str, Any] = {}
+        engine = value.get("engine")
+        if isinstance(engine, str) and engine in {"markitdown", "docling"}:
+            safe["engine"] = engine
+        version = value.get("version")
+        if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z.+_-]{1,64}", version):
+            safe["version"] = version
+        pages = value.get("page_count")
+        if type(pages) is int and 0 <= pages <= 100000:
+            safe["page_count"] = pages
+        duration = value.get("duration_seconds")
+        if (
+            isinstance(duration, (int, float))
+            and not isinstance(duration, bool)
+            and 0 <= duration <= 86400
+            and math.isfinite(duration)
+        ):
+            safe["duration_seconds"] = round(duration, 3)
+        if value.get("profile") == "pdf-layout-local-v3":
+            safe["profile"] = "pdf-layout-local-v3"
+        if value.get("ocr") is False:
+            safe["ocr"] = False
+        if value.get("warnings") == []:
+            safe["warnings"] = []
+        return safe
+
+    @staticmethod
+    def _engine(engine: Any) -> str:
+        if not isinstance(engine, str) or engine not in {"markitdown", "docling"}:
+            raise JobError(400, "不支持此转换引擎")
+        return engine
+
+    def _available(self, engine: str) -> None:
+        self._engine(engine)
+        try:
+            ensure_engine_available(engine, self.settings)
+        except ConversionError as exc:
+            raise JobError(400, str(exc)[:300]) from exc
+
+    @staticmethod
     def _snapshot(row: Any) -> dict[str, Any]:
         return {
             "id": row["id"],
@@ -211,6 +288,8 @@ class JobService:
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
             "error": row["error"],
+            "engine": row["engine"],
+            "metadata": JobService._safe_metadata(row["metadata"]),
         }
 
     @staticmethod
@@ -274,13 +353,14 @@ class JobService:
         )
 
     def enqueue(
-        self, user_id: str, files: list[dict[str, Any]]
+        self, user_id: str, files: list[dict[str, Any]], engine: str = "markitdown"
     ) -> list[dict[str, Any]]:
         if (
             not isinstance(files, list)
             or not 1 <= len(files) <= self.settings.max_files
         ):
             raise JobError(400, "请选择允许数量的文件")
+        engine = self._engine(engine)
         prepared: list[dict[str, Any]] = []
         total = 0
         for upload in files:
@@ -314,6 +394,18 @@ class JobService:
             )
         if total > self.settings.max_total_bytes:
             raise JobError(413, "文件总大小超过限制")
+        # Authenticate before external preflight, but do not hold SQLite's writer
+        # lock while the bounded PDF/runtime validator runs. Admission rechecks
+        # the account and all mutable limits afterward.
+        with self.db.connect() as connection:
+            user = self._user(connection, user_id)
+            if any(len(upload["data"]) > user["max_file_bytes"] for upload in prepared):
+                raise JobError(413, "文件超过账号的单个文件大小限制")
+        self._available(engine)
+        try:
+            validate_engine_uploads(engine, prepared, self.settings)
+        except ConversionError as exc:
+            raise JobError(400, str(exc)[:300]) from exc
         now = time.time()
         staged: list[str] = []
         try:
@@ -341,8 +433,8 @@ class JobService:
                     )
                     size = len(upload["data"])
                     connection.execute(
-                        "INSERT INTO jobs(id,user_id,filename,suffix,size,reserved_bytes,status,created_at,expires_at) "
-                        "VALUES (?,?,?,?,?,?,'queued',?,?)",
+                        "INSERT INTO jobs(id,user_id,filename,suffix,size,reserved_bytes,status,created_at,expires_at,engine) "
+                        "VALUES (?,?,?,?,?,?,'queued',?,?,?)",
                         (
                             upload["id"],
                             user_id,
@@ -352,6 +444,7 @@ class JobService:
                             size + OUTPUT_RESERVATION,
                             now,
                             now + self.settings.retention_seconds,
+                            engine,
                         ),
                     )
                 results = [
@@ -399,29 +492,56 @@ class JobService:
                         raise JobError(410, "任务文件不可用") from exc
             return result
 
+    def _retryable(self, row: Any) -> None:
+        if row["status"] == "expired" or row["expires_at"] <= time.time():
+            raise JobError(410, "任务已过期")
+        if row["status"] != "failed" or row["attempts"] >= self.settings.max_attempts:
+            raise JobError(409, "此任务不能重试")
+        if not self._source_exists(row):
+            raise JobError(410, "源文件不可用")
+
     def retry(self, user_id: str, job_id: str) -> dict[str, Any]:
-        now = time.time()
+        with self.db.connect() as connection:
+            row = self._owned(connection, user_id, job_id)
+            self._retryable(row)
+        self._available(row["engine"])
+        # A canceled job can become publicly failed before its process exits.
+        # Reusing its directory/job ID during that interval would let the old
+        # converter race the retry and incorrectly release its physical slot.
+        with self._active_lock, self.db.transaction() as connection:
+            now = time.time()
+            self._expire_due(connection, now)
+            current = self._owned(connection, user_id, job_id)
+            self._retryable(current)
+            if job_id in self._inflight:
+                raise JobError(409, "任务正在停止，请稍后重试")
+            user = self._user(connection, user_id)
+            self._capacity(connection, 1)
+            self._charge(connection, user, 1, now)
+            self._discard_outputs(current)
+            connection.execute(
+                "UPDATE jobs SET status='queued', error=NULL, metadata='{}', started_at=NULL, finished_at=NULL WHERE id=?",
+                (job_id,),
+            )
+            result = self._snapshot(self._owned(connection, user_id, job_id))
+        self._wake.set()
+        return result
+
+    def cancel(self, user_id: str, job_id: str) -> dict[str, Any]:
         with self.db.transaction() as connection:
+            now = time.time()
             self._expire_due(connection, now)
             row = self._owned(connection, user_id, job_id)
             if row["status"] == "expired":
                 raise JobError(410, "任务已过期")
-            if (
-                row["status"] != "failed"
-                or row["attempts"] >= self.settings.max_attempts
-            ):
-                raise JobError(409, "此任务不能重试")
-            user = self._user(connection, user_id)
-            if not self._source_exists(row):
-                raise JobError(410, "源文件不可用")
-            self._capacity(connection, 1)
-            self._charge(connection, user, 1, now)
-            self._discard_outputs(row)
+            if row["status"] not in {"queued", "running"}:
+                raise JobError(409, "此任务不能取消")
             connection.execute(
-                "UPDATE jobs SET status='queued', error=NULL, started_at=NULL, finished_at=NULL WHERE id=?",
-                (job_id,),
+                "UPDATE jobs SET status='failed', finished_at=?, error='任务已取消', metadata='{}' WHERE id=?",
+                (now, job_id),
             )
             result = self._snapshot(self._owned(connection, user_id, job_id))
+        # Cancellation does not refund quota or release a physical worker slot.
         self._wake.set()
         return result
 
@@ -537,15 +657,40 @@ class JobService:
                         pass
 
     def _recover(self) -> None:
+        # Runtime readiness may launch a bounded external probe. It must happen
+        # before charging retries and outside SQLite write transactions.
+        with self.db.connect() as connection:
+            pending = connection.execute(
+                "SELECT * FROM jobs WHERE status IN ('queued','running')"
+            ).fetchall()
+        readiness: dict[str, str | None] = {}
+        for candidate in pending:
+            engine = candidate["engine"]
+            if engine not in readiness:
+                try:
+                    self._available(engine)
+                except JobError as exc:
+                    readiness[engine] = exc.detail
+                else:
+                    readiness[engine] = None
         now = time.time()
         with self.db.transaction() as connection:
             self._expire_due(connection, now)
-            for row in connection.execute(
-                "SELECT * FROM jobs WHERE status='running'"
-            ).fetchall():
-                error = "任务被中断，请重试"
-                if row["attempts"] < self.settings.max_attempts and self._source_exists(
-                    row
+            for candidate in pending:
+                row = connection.execute(
+                    "SELECT * FROM jobs WHERE id=? AND status IN ('queued','running')",
+                    (candidate["id"],),
+                ).fetchone()
+                if row is None:
+                    continue
+                unavailable = readiness[row["engine"]]
+                if row["status"] == "queued" and unavailable is None:
+                    continue
+                error = unavailable or "任务被中断，请重试"
+                if (
+                    unavailable is None
+                    and row["attempts"] < self.settings.max_attempts
+                    and self._source_exists(row)
                 ):
                     try:
                         user = self._user(connection, row["user_id"])
@@ -555,12 +700,12 @@ class JobService:
                         error = exc.detail
                     else:
                         connection.execute(
-                            "UPDATE jobs SET status='queued', started_at=NULL, finished_at=NULL, error=NULL WHERE id=?",
+                            "UPDATE jobs SET status='queued', started_at=NULL, finished_at=NULL, error=NULL, metadata='{}' WHERE id=?",
                             (row["id"],),
                         )
                         continue
                 connection.execute(
-                    "UPDATE jobs SET status='failed', finished_at=?, error=? WHERE id=?",
+                    "UPDATE jobs SET status='failed', finished_at=?, error=?, metadata='{}' WHERE id=?",
                     (now, error, row["id"]),
                 )
 
@@ -610,7 +755,9 @@ class JobService:
                 return
             self._stop.set()
             self._wake.set()
-            deadline = time.monotonic() + CONVERSION_TIMEOUT + 5
+            # Docling has a longer wall-clock bound but cancellation normally
+            # interrupts it immediately. Retain the lock if any worker survives.
+            deadline = time.monotonic() + max(CONVERSION_TIMEOUT, 60) + 5
             for thread in self._threads:
                 thread.join(max(0, deadline - time.monotonic()))
             if any(thread.is_alive() for thread in self._threads):
@@ -644,9 +791,35 @@ class JobService:
             exclusion = (
                 "AND j.user_id NOT IN (" + ",".join("?" for _ in blocked_users) + ") "
             )
+        # Runtime checks are performed outside the write transaction. The
+        # converter repeats readiness checks before process startup as well.
+        with self.db.connect() as connection:
+            engines = [
+                row["engine"]
+                for row in connection.execute(
+                    "SELECT DISTINCT engine FROM jobs WHERE status='queued'"
+                )
+            ]
+        unavailable: dict[str, str] = {}
+        for engine in engines:
+            try:
+                self._available(engine)
+            except JobError as exc:
+                unavailable[engine] = exc.detail
+        engine_exclusion = (
+            "AND j.engine != 'docling' "
+            if "docling" in self._inflight_engines.values()
+            else ""
+        )
         now = time.time()
         with self.db.transaction() as connection:
             self._expire_due(connection, now)
+            for engine, error in unavailable.items():
+                connection.execute(
+                    "UPDATE jobs SET status='failed', finished_at=?, error=?, metadata='{}' "
+                    "WHERE status='queued' AND engine=?",
+                    (now, error, engine),
+                )
             # A transient database/output failure after conversion can leave a
             # running row behind even though _execute has released its physical
             # slot. Recover that row without requiring an application restart.
@@ -674,6 +847,7 @@ class JobService:
                 "WHERE j.status='queued' AND j.expires_at>? AND u.is_active=1 "
                 "AND (SELECT COUNT(*) FROM jobs r WHERE r.user_id=j.user_id AND r.status='running') < ? "
                 + exclusion
+                + engine_exclusion
                 + "ORDER BY j.created_at, j.id LIMIT 1",
                 (now, self.settings.per_user_concurrency, *blocked_users),
             ).fetchone()
@@ -695,6 +869,7 @@ class JobService:
                 "SELECT * FROM jobs WHERE id=?", (row["id"],)
             ).fetchone()
         self._inflight[row["id"]] = row["user_id"]
+        self._inflight_engines[row["id"]] = row["engine"]
         return claimed
 
     def _execute(self, row: Any) -> None:
@@ -703,9 +878,35 @@ class JobService:
         finally:
             with self._active_lock:
                 self._inflight.pop(row["id"], None)
+                self._inflight_engines.pop(row["id"], None)
             self._wake.set()
 
+    def _cancelled(self, row: Any) -> bool:
+        if self._stop.is_set():
+            return True
+        try:
+            with self.db.connect() as connection:
+                # Keep cancellation polling short even during database pressure;
+                # uncertainty fails closed instead of extending the child limit.
+                connection.execute("PRAGMA busy_timeout=50")
+                current = connection.execute(
+                    "SELECT j.status,j.expires_at,u.is_active FROM jobs j "
+                    "JOIN users u ON j.user_id=u.id WHERE j.id=? AND j.user_id=?",
+                    (row["id"], row["user_id"]),
+                ).fetchone()
+            return (
+                current is None
+                or current["status"] != "running"
+                or current["expires_at"] <= time.time()
+                or not current["is_active"]
+            )
+        except Exception:
+            # Losing authority to establish that the job is still runnable must
+            # not allow an expensive child to continue indefinitely.
+            return True
+
     def _execute_claimed(self, row: Any) -> None:
+        metadata: dict[str, Any] = {}
         markdown: bytes | None = None
         html: bytes | None = None
         error: str | None = None
@@ -714,9 +915,18 @@ class JobService:
             # The existing subprocess writes this fixed result path. Creating it
             # privately first preserves mode 0600 when it truncates the file.
             self._write(directory / "result.json", b"")
-            converted, preview = run_conversion(
-                directory / ("source" + row["suffix"]), row["suffix"]
-            )
+            source = directory / ("source" + row["suffix"])
+            if row["engine"] == "docling":
+                converted, preview, details = run_docling_conversion(
+                    source, self.settings, cancelled=lambda: self._cancelled(row)
+                )
+                metadata = self._safe_metadata(details)
+            elif row["engine"] == "markitdown":
+                # Keep this two-argument contract unchanged for existing callers
+                # and default-engine regression tests.
+                converted, preview = run_conversion(source, row["suffix"])
+            else:
+                raise ConversionError("不支持此转换引擎")
             if not isinstance(converted, str) or not isinstance(preview, str):
                 raise ConversionError("转换结果无效")
             markdown, html = converted.encode("utf-8"), preview.encode("utf-8")
@@ -736,6 +946,8 @@ class JobService:
             if current is None or current["status"] != "running":
                 if current is None or current["status"] == "expired":
                     self._remove_files(row["id"])
+                elif current["status"] == "failed":
+                    self._discard_outputs(current)
                 return
             user = connection.execute(
                 "SELECT is_active FROM users WHERE id=?", (row["user_id"],)
@@ -752,8 +964,14 @@ class JobService:
             except (OSError, JobError):
                 error = "无法保存转换结果，请稍后重试"
             connection.execute(
-                "UPDATE jobs SET status=?, finished_at=?, error=? WHERE id=? AND status='running'",
-                ("failed" if error else "succeeded", now, error, row["id"]),
+                "UPDATE jobs SET status=?, finished_at=?, error=?, metadata=? WHERE id=? AND status='running'",
+                (
+                    "failed" if error else "succeeded",
+                    now,
+                    error,
+                    json.dumps({} if error else metadata, ensure_ascii=False),
+                    row["id"],
+                ),
             )
         self._wake.set()
 

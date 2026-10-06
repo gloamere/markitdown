@@ -19,6 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import AuthError, AuthService
+from .engines import engine_config
 from .jobs import JobError, JobService
 from .preview import render_preview as render_preview
 from .state import Database, Settings
@@ -262,6 +263,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "max_total_bytes": settings.max_total_bytes,
             "max_files": settings.max_files,
             "extensions": list(EXTENSIONS),
+            "engines": await asyncio.to_thread(engine_config, settings),
             "retention_seconds": settings.retention_seconds,
             "has_admin": await asyncio.to_thread(auth(request).has_admin),
         }
@@ -345,20 +347,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def ingest_jobs(request: Request, current: dict) -> dict:
         user_id = current["user"]["id"]
-        usage = await asyncio.to_thread(jobs(request).get_usage, user_id)
-        if usage["remaining"] <= 0:
-            raise HTTPException(429, "今日转换额度已用完，请在 UTC 次日重试")
         max_file_bytes = min(settings.max_file_bytes, current["user"]["max_file_bytes"])
         accepted: list[dict] = []
         errors: list[dict] = []
         try:
-            async with request.form(max_files=settings.max_files, max_fields=0) as form:
+            async with request.form(max_files=settings.max_files, max_fields=1) as form:
+                engines = form.getlist("engine")
+                if len(engines) > 1 or any(
+                    not isinstance(value, str) for value in engines
+                ):
+                    raise HTTPException(400, "请提供一个有效的转换引擎")
+                engine = engines[0] if engines else "markitdown"
+                if engine not in {"markitdown", "docling"}:
+                    raise HTTPException(400, "不支持此转换引擎")
                 files = form.getlist("files")
                 if (
                     not files
                     or len(files) > settings.max_files
                     or any(not isinstance(file, UploadFile) for file in files)
-                    or any(key != "files" for key in form)
+                    or any(key not in {"files", "engine"} for key in form)
                 ):
                     raise HTTPException(400, "请上传 1–10 个文件，字段名为 files")
                 uploads: list[UploadFile] = files  # type: ignore[assignment]
@@ -397,7 +404,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not accepted:
                     return {"jobs": [], "errors": errors}
                 created = await asyncio.to_thread(
-                    jobs(request).enqueue, user_id, accepted
+                    jobs(request).enqueue, user_id, accepted, engine
                 )
                 return {"jobs": created, "errors": errors}
         except StarletteHTTPException as exc:
@@ -446,6 +453,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         current = await session(request, mutate=True)
         return await asyncio.to_thread(
             jobs(request).retry, current["user"]["id"], job_id
+        )
+
+    @application.post("/api/jobs/{job_id}/cancel")
+    async def cancel(request: Request, job_id: str) -> dict:
+        current = await session(request, mutate=True)
+        return await asyncio.to_thread(
+            jobs(request).cancel, current["user"]["id"], job_id
         )
 
     @application.delete("/api/jobs/{job_id}")

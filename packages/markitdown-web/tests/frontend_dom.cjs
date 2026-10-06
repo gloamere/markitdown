@@ -14,6 +14,7 @@ const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const NOW = Date.UTC(2026, 9, 5, 12, 0, 0);
 const baseConfig = { max_files: 10, max_file_bytes: 20 * 1048576, max_total_bytes: 50 * 1048576, extensions: [".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv", ".json"], retention_seconds: 86400, has_admin: true };
+const enhancedConfig = { ...baseConfig, engines: [{ id: "markitdown", available: true, max_file_bytes: 20 * 1048576, timeout_seconds: 45 }, { id: "docling", available: true, max_file_bytes: 10 * 1048576, max_pages: 2, timeout_seconds: 60, ocr: false }] };
 const baseUser = { id: "u1", username: "member", is_admin: false, is_active: true, daily_quota: 20, max_file_bytes: 10 * 1048576 };
 const identity = (user = {}) => ({ user: { ...baseUser, ...user }, csrf_token: `test-session-${user.id || "u1"}`, usage: { used: 0, daily_quota: 20, remaining: 20, resets_at: NOW / 1000 + 43200, max_file_bytes: user.max_file_bytes || baseUser.max_file_bytes, active_jobs: 0 } });
 const job = (id, status = "succeeded", extra = {}) => ({ id, filename: `file-${id}.md`, status, size_bytes: 40, attempts: 1, created_at: NOW / 1000, expires_at: NOW / 1000 + 86400, error: null, ...extra });
@@ -117,7 +118,7 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     const queued = job("a", "queued"), upload = deferred();
     const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => upload.promise, "GET /api/jobs/a": () => response(detail(job("a"), "# Result")) } }); await flush();
     app.add(file("one.md"), file("two.md")); app.ui("convert-button").click(); app.ui("convert-button").click(); assert.equal(app.calls("/api/jobs", "POST").length, 1); assert(app.ui("choose-button").disabled);
-    const request = app.calls("/api/jobs", "POST")[0]; assert.equal(request.options.body.parts.length, 2); assert(request.options.body.parts.every((part) => part[0] === "files")); assert.equal(request.options.headers["X-CSRF-Token"], identity().csrf_token);
+    const request = app.calls("/api/jobs", "POST")[0]; assert.equal(request.options.body.parts.length, 3); assert.equal(request.options.body.parts.filter((part) => part[0] === "files").length, 2); assert.equal(request.options.body.parts.find((part) => part[0] === "engine")[1], "markitdown"); assert.equal(request.options.headers["X-CSRF-Token"], identity().csrf_token);
     app.state.jobs = [queued]; upload.resolve(response({ jobs: [queued], errors: [{ filename: "<hostile>.md", error: "<img onerror=1>" }] }, 202)); await flush();
     assert.equal(app.ui("queue-count").textContent, "0"); assert.equal(app.ui("history-list").children[0].dataset.state, "queued"); assert(app.ui("notice").textContent.includes("<img onerror=1>")); assert.equal(app.ui("notice").innerHTML, ""); assert([...app.timers.values()].some((timer) => timer.delay === 2000));
     app.state.jobs = [job("a", "running")]; await app.advance(2000); assert.equal(app.ui("history-list").children[0].dataset.state, "running");
@@ -220,6 +221,142 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     const config = deferred(); const app = createApp({ routes: { "GET /api/config": () => config.promise } });
     app.window.listeners.pagehide(); delete app.state.routes["GET /api/config"]; app.window.listeners.pageshow({ persisted: true }); await flush(); assert(!app.ui("login-button").disabled);
     config.resolve(response({ ...baseConfig, has_admin: false })); await flush(); assert(app.ui("bootstrap-notice").hidden); assert(!app.ui("login-button").disabled); app.stop();
+  });
+  await test("legacy config defaults safely and unavailable engine cannot be forced in DOM", async () => {
+    const app = createApp({ me: identity() }); await flush();
+    assert(app.ui("engine-markitdown").checked); assert(app.ui("engine-docling").disabled);
+    assert(app.ui("engine-limit-docling").textContent.includes("尚未启用"));
+    app.ui("engine-docling").disabled = false; app.ui("engine-docling").emit("change");
+    assert(app.ui("engine-markitdown").checked); assert(app.ui("engine-docling").disabled);
+    app.stop();
+  });
+  await test("engine availability reasons are text and unavailable default blocks uploads", async () => {
+    const app = createApp({ me: identity(), config: { ...baseConfig, engines: [{ id: "markitdown", available: false, reason: "<img onerror=1>" }, { id: "docling", available: false, reason: "Missing local models" }] } }); await flush();
+    app.add(file("safe.md")); assert(app.ui("convert-button").disabled);
+    assert.equal(app.ui("engine-selection-note").textContent, "<img onerror=1>"); assert.equal(app.ui("engine-selection-note").innerHTML, "");
+    assert(app.ui("engine-limit-docling").textContent.includes("Missing local models")); app.stop();
+  });
+  await test("Docling preflight revalidates PDF-only and the stricter engine or user size cap", async () => {
+    const app = createApp({ me: identity({ max_file_bytes: 20 * 1048576 }), config: enhancedConfig }); await flush();
+    app.add(file("notes.md"), file("too-large.pdf", 11 * 1048576));
+    app.ui("engine-docling").emit("change"); assert.equal(app.ui("file-input").accept, ".pdf");
+    assert(app.ui("convert-button").disabled); assert(app.ui("file-list").children[0].textContent.includes("仅支持 PDF"));
+    assert(app.ui("file-list").children[1].textContent.includes("10 MiB"));
+    assert(app.ui("engine-selection-note").textContent.includes("2 页会拒绝"));
+    assert(app.ui("engine-limit-docling").textContent.includes("60 秒")); assert(app.ui("engine-limit-docling").textContent.includes("OCR 关闭"));
+    app.ui("engine-markitdown").emit("change"); assert(!app.ui("convert-button").disabled);
+    app.ui("clear-button").click(); app.state.me = identity({ max_file_bytes: 1024 }); app.window.listeners.focus(); await flush();
+    app.ui("engine-docling").emit("change"); app.add(file("user-limit.pdf", 2048)); assert(app.ui("convert-button").disabled);
+    assert(app.ui("upload-limits").textContent.includes("单个 1 KiB")); app.stop();
+  });
+  await test("upload captures the chosen engine and freezes selection until server acceptance", async () => {
+    const upload = deferred(); const item = job("enhanced", "queued", { filename: "report.pdf", engine: "docling" });
+    const app = createApp({ me: identity(), config: enhancedConfig, routes: { "POST /api/jobs": () => upload.promise } }); await flush();
+    app.ui("engine-docling").emit("change"); app.add(file("report.pdf")); app.ui("convert-button").click();
+    assert(app.ui("engine-markitdown").disabled); assert(!app.ui("upload-progress").hidden);
+    app.ui("engine-markitdown").emit("change"); assert(app.ui("engine-docling").checked);
+    assert.equal(app.calls("/api/jobs", "POST")[0].options.body.parts.find(([key]) => key === "engine")[1], "docling");
+    app.state.jobs = [item]; upload.resolve(response({ jobs: [item], errors: [] }, 202)); await flush();
+    assert(app.ui("upload-progress").hidden); assert(!app.ui("engine-markitdown").disabled);
+    assert(app.ui("history-list").textContent.includes("Docling")); assert.equal(app.ui("document-engine").textContent, "Docling"); app.stop();
+  });
+  await test("cancel is idempotent in flight, exposes cancelled state and preserves retry engine", async () => {
+    const cancellation = deferred(); const item = job("cancel", "running", { filename: "report.pdf", engine: "docling" });
+    const app = createApp({ me: identity(), config: enhancedConfig, jobs: [item], routes: { "POST /api/jobs/cancel/cancel": () => cancellation.promise } }); await flush();
+    app.history("select"); assert(!app.ui("document-cancel").hidden); app.ui("document-cancel").click(); app.history("cancel");
+    assert.equal(app.calls("/api/jobs/cancel/cancel").length, 1);
+    app.state.jobs = [job("cancel", "failed", { filename: "report.pdf", engine: "docling", error: "任务已取消" })]; cancellation.resolve(response(app.state.jobs[0])); await flush();
+    assert.equal(app.ui("output-label").textContent, "已取消"); assert(app.ui("document-progress").hidden); assert(app.ui("document-cancel").hidden); assert(!app.ui("document-retry").hidden);
+    assert(app.ui("empty-description").textContent.includes("额度不退还"));
+    app.state.routes["POST /api/jobs/cancel/retry"] = () => response({ detail: "任务正在停止，请稍后重试" }, 409);
+    app.ui("document-retry").click(); await flush(); assert(app.ui("notice").textContent.includes("正在停止"));
+    app.state.routes["POST /api/jobs/cancel/retry"] = (_, state) => { state.jobs = [job("cancel", "queued", { engine: "docling", attempts: 2 })]; return response(state.jobs[0]); };
+    app.ui("document-retry").click(); await flush();
+    assert.equal(app.calls("/api/jobs/cancel/retry")[1].options.body, undefined); assert.equal(app.ui("document-engine").textContent, "Docling"); app.stop();
+  });
+  await test("late cancellation cannot repopulate private document state after logout", async () => {
+    const cancellation = deferred(); const app = createApp({ me: identity(), config: enhancedConfig, jobs: [job("private", "running", { engine: "docling" })], routes: { "POST /api/jobs/private/cancel": () => cancellation.promise } }); await flush();
+    app.history("select"); app.history("cancel"); app.ui("logout-button").click(); await flush();
+    cancellation.resolve(response(job("private", "failed", { engine: "docling", error: "任务已取消" }))); await flush();
+    assert.equal(app.ui("history-count").textContent, "0"); assert.equal(app.ui("document-engine").textContent, ""); assert(app.ui("engine-markitdown").checked); assert(app.ui("document-progress").hidden); app.stop();
+  });
+  await test("unknown history action cannot fall through to deletion", async () => {
+    const app = createApp({ me: identity(), jobs: [job("safe")] }); await flush();
+    const button = app.ui("history-list").querySelector('[data-action="delete"]'); button.dataset.action = "unexpected";
+    app.ui("history-list").emit("click", { target: button }); await flush(); assert.equal(app.calls("/api/jobs/safe", "DELETE").length, 0); assert.equal(app.window.confirmations.length, 0); app.stop();
+  });
+  await test("history filters keep counts and cross-filter ZIP selection without hiding outcomes", async () => {
+    const items = [job("active", "running"), job("ready"), job("problem", "failed"), job("expired", "succeeded", { expires_at: NOW / 1000 - 1 })];
+    const app = createApp({ me: identity(), jobs: items }); await flush();
+    assert(app.ui("workspace-status").textContent.includes("1 项处理中 · 1 项已完成 · 2 项需处理"));
+    app.ui("filter-completed").click(); assert.equal(app.ui("history-list").children.length, 1); app.check();
+    app.ui("filter-active").click(); assert.equal(app.ui("history-list").children.length, 1); assert(!app.ui("archive-button").disabled);
+    app.ui("filter-failed").click(); assert.equal(app.ui("history-list").children.length, 2); assert.equal(app.ui("filter-failed").getAttribute("aria-pressed"), "true");
+    app.state.jobs = [job("ready")]; app.ui("refresh-button").click(); await flush(); assert(!app.ui("history-empty").hidden); assert(app.ui("history-empty").textContent.includes("此分类")); app.stop();
+  });
+  await test("processing is indeterminate and upload/read busy states clear after completion", async () => {
+    const reading = deferred(); const app = createApp({ me: identity(), jobs: [job("read")], routes: { "GET /api/jobs/read": () => reading.promise } }); await flush();
+    app.history("select"); assert(!app.ui("document-progress").hidden); assert.equal(app.ui("output-content").getAttribute("aria-busy"), "true");
+    reading.resolve(response(detail(job("read")))); await flush(); assert(app.ui("document-progress").hidden); assert.equal(app.ui("output-content").getAttribute("aria-busy"), "false");
+    const progressTags = [...html.matchAll(/<progress\b[^>]*>/g)].map((match) => match[0]); assert.equal(progressTags.length, 2);
+    assert(progressTags.every((tag) => !/\bvalue=/.test(tag))); assert(!script.includes("aria-valuenow")); app.stop();
+  });
+  await test("three view modes support keyboard wraparound, source fidelity and page metadata", async () => {
+    const item = job("pdf", "succeeded", { filename: "table.pdf", engine: "docling", metadata: { page_count: 2 } });
+    const source = "# Heading\n\n| A | B |\n| - | - |\n| 1 | 2 |";
+    const app = createApp({ me: identity(), config: enhancedConfig, jobs: [item], routes: { "GET /api/jobs/pdf": () => response(detail(item, source)) } }); await flush(); app.history("select"); await flush();
+    app.ui("preview-tab").emit("keydown", { key: "ArrowLeft" }); assert.equal(app.document.activeElement, app.ui("split-tab"));
+    assert(!app.ui("preview-panel").hidden && !app.ui("source-panel").hidden); assert(app.ui("output-content").className.includes("is-split"));
+    assert.equal(app.ui("source-panel").getAttribute("aria-labelledby"), "split-tab"); assert.equal(app.ui("markdown-source").value, source);
+    assert.equal(app.ui("document-engine").textContent, "Docling · 2 页"); assert(!app.ui("preview-safety").hidden);
+    app.ui("split-tab").emit("keydown", { key: "ArrowRight" }); assert.equal(app.document.activeElement, app.ui("preview-tab")); assert(app.ui("source-panel").hidden);
+    app.ui("preview-tab").emit("keydown", { key: "End" }); assert.equal(app.ui("split-tab").getAttribute("aria-selected"), "true");
+    app.ui("source-tab").click(); app.ui("copy-button").click(); await flush(); assert.equal(app.copies[0], source); assert(app.ui("copy-button").textContent.includes("已复制")); app.stop();
+  });
+  await test("failed result read has an explicit reload action and clears its previous error", async () => {
+    const app = createApp({ me: identity(), jobs: [job("read")], routes: { "GET /api/jobs/read": () => response({ detail: "Temporary reader failure" }, 503) } }); await flush(); app.history("select"); await flush();
+    assert(!app.ui("document-reload").hidden); assert(app.ui("download-button").disabled);
+    app.state.routes["GET /api/jobs/read"] = () => response(detail(job("read"), "Recovered")); app.ui("document-reload").click(); await flush();
+    assert(app.ui("document-reload").hidden); assert.equal(app.ui("markdown-source").value, "Recovered"); assert(!app.ui("download-button").disabled); app.stop();
+  });
+  await test("ambiguous upload failure blocks accidental duplicate until the user checks history", async () => {
+    const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => response({ detail: "Upload response interrupted" }, 503) } }); await flush();
+    app.add(file("uncertain.md")); app.ui("convert-button").click(); await flush();
+    assert(app.ui("convert-button").disabled); assert(!app.ui("upload-recheck").hidden); assert(app.ui("notice").textContent.includes("核对转换记录"));
+    app.ui("convert-button").emit("click"); assert.equal(app.calls("/api/jobs", "POST").length, 1);
+    app.ui("upload-recheck").click(); assert(!app.ui("convert-button").disabled);
+    app.ui("clear-button").click(); assert(app.ui("upload-recheck").hidden); assert.equal(app.ui("queue-count").textContent, "0"); app.stop();
+  });
+  await test("partial server rejection keeps the rejected file and can be reconsidered with another engine", async () => {
+    const app = createApp({ me: identity(), config: enhancedConfig, routes: { "POST /api/jobs": (_, state) => { state.jobs = [job("accepted", "queued", { filename: "good.pdf", engine: "docling" })]; return response({ jobs: state.jobs, errors: [{ filename: "too-many-pages.pdf", error: "PDF 超过 2 页" }] }, 202); } } }); await flush();
+    app.ui("engine-docling").emit("change"); app.add(file("good.pdf"), file("too-many-pages.pdf")); app.ui("convert-button").click(); await flush();
+    assert.equal(app.ui("queue-count").textContent, "1"); assert(app.ui("file-list").textContent.includes("PDF 超过 2 页")); assert(app.ui("convert-button").disabled);
+    app.ui("refresh-button").click(); await flush(); assert(app.ui("convert-button").disabled);
+    app.ui("engine-markitdown").emit("change"); assert(!app.ui("convert-button").disabled); app.stop();
+  });
+  await test("keyboard focus survives ZIP selection and removing the last queued file", async () => {
+    const app = createApp({ me: identity(), jobs: [job("focus")] }); await flush();
+    const checkbox = app.ui("history-list").querySelector('[data-action="archive"]'); checkbox.focus(); app.check();
+    assert.equal(app.document.activeElement.dataset.action, "archive"); assert(app.document.activeElement.checked);
+    app.add(file("remove.md")); const remove = app.ui("file-list").querySelector('[data-action="remove"]'); remove.focus(); app.ui("file-list").emit("click", { target: remove });
+    assert.equal(app.document.activeElement, app.ui("choose-button")); app.stop();
+  });
+  await test("drag/drop accepts files, clears nested drag highlight and ignores busy drops", async () => {
+    const upload = deferred(); const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => upload.promise } }); await flush();
+    app.ui("drop-zone").emit("dragenter"); app.ui("drop-zone").emit("dragenter"); app.ui("drop-zone").emit("dragleave"); assert(app.ui("drop-zone").className.includes("drag-over"));
+    app.ui("drop-zone").emit("drop", { dataTransfer: { files: [file("drop.md")] } }); assert(!app.ui("drop-zone").className.includes("drag-over")); assert.equal(app.ui("queue-count").textContent, "1");
+    app.ui("convert-button").click(); app.ui("drop-zone").emit("drop", { dataTransfer: { files: [file("ignored.md")] } }); assert.equal(app.ui("queue-count").textContent, "1");
+    assert.equal(app.ui("drop-zone").getAttribute("aria-disabled"), "true"); app.stop(); upload.resolve(response({ jobs: [], errors: [] }, 202)); await flush();
+  });
+  await test("HTML and CSS provide native engine semantics, mobile targets and reduced-motion paths", async () => {
+    assert(/<fieldset[^>]*id="engine-group"/.test(html)); assert(/<legend>选择转换引擎<\/legend>/.test(html));
+    assert(/id="engine-docling"[^>]*type="radio"[^>]*name="engine"/.test(html));
+    assert(/id="engine-docling"[^>]*aria-describedby="engine-description-docling engine-limit-docling"/.test(html));
+    assert(/href="#output-heading"/.test(html)); assert(/id="output-heading" tabindex="-1"/.test(html));
+    const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
+    assert(css.includes("@media (max-width: 520px)")); assert(css.includes("min-height: 44px"));
+    assert(css.includes("@media (prefers-reduced-motion: reduce)")); assert(css.includes("@media (forced-colors: active)"));
+    assert(css.includes(".output-content.is-split")); assert(!css.includes("@import"));
   });
   assert(!script.includes("localStorage") && !script.includes("sessionStorage"));
   assert.equal((script.match(/\.innerHTML\s*=/g) || []).length, 1, "Only sanitized server preview may become HTML");

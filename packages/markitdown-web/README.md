@@ -6,13 +6,14 @@
 
 - 管理员创建一次性邀请；邀请注册、登录、退出，会话可撤销
 - 每人独立的文件、任务和历史；管理员也不能通过文档接口读取别人的内容
-- 持久化 SQLite 任务队列、状态查询、失败重试和中断恢复
+- 持久化 SQLite 任务队列、状态查询、取消、失败重试和中断恢复
 - 文本型 PDF、DOCX、XLSX、TXT、MD、CSV、JSON 转 Markdown
-- 中文暮色界面、预览 / 源码切换、复制、单文件下载、最多 10 个结果的 ZIP 下载
+- 中文暮色界面、引擎选择、历史筛选、预览 / 源码 / 双栏对照、复制、单文件下载、最多 10 个结果的 ZIP 下载
+- 可选 Docling CPU 增强：最多 2 页 / 10 MiB 的文字型 PDF，优化多栏顺序与表格；默认关闭
 - 最小管理界面：邀请创建/撤销、用户启停、每日额度和单文件大小限制
 - 上传、任务和存储限制；原文件及转换结果从上传起默认保留 24 小时
 
-暂不包含 OCR、AI 摘要、支付、邮件发送、密码找回、角色提升、公网部署或复杂版式复刻。扫描版 PDF 需要 OCR，本版本会提示无法提取文字。
+暂不包含 OCR、AI 摘要、支付、邮件发送、密码找回、角色提升、公网部署或像素级版式复刻。扫描版 PDF 需要 OCR，本版本会提示无法提取文字。
 
 ## 本机开发启动
 
@@ -48,6 +49,10 @@ Windows 使用 `.venv\Scripts\Activate.ps1`，并用 `$env:ORT_DISABLE_TELEMETRY
 python -m pip install -e 'packages/markitdown[pdf,docx,xlsx]' -e 'packages/markitdown-web[test]'
 ```
 
+## 可选 PDF 增强
+
+默认安装不包含 Docling。增强引擎采用独立 CPU 环境和本地模型，需要管理员显式启用；最多 **2 页、10 MiB、60 秒、单个增强转换并发**，OCR 关闭，不接受部分转换结果，也不自动切换引擎。详情、安装和安全边界见 [Docling 集成说明](../../docs/DOCLING-INTEGRATION.zh-CN.md)。
+
 ## 额度、队列与保留规则
 
 | 项目 | 默认值 |
@@ -59,7 +64,8 @@ python -m pip install -e 'packages/markitdown[pdf,docx,xlsx]' -e 'packages/marki
 | 同时转换 | 全局 2 个，每人 1 个 |
 | 等待 + 正在运行的任务 | 全局最多 100 个 |
 | 逻辑存储预算 | 1 GiB，按源文件 + 每任务 6 MiB 输出预留；另需上传/工作进程临时空间 |
-| 每个文件的转换 + 预览 | 最长 45 秒，Markdown 2 MiB，HTML 4 MiB |
+| 普通引擎的转换 + 预览 | 最长 45 秒，Markdown 2 MiB，HTML 4 MiB |
+| Docling 增强 | 最多 2 页 / 10 MiB / 60 秒；全局 1 个，仍计入全局和每人并发 |
 | 每任务最多尝试 | 3 次 |
 | 原文件与结果 | 上传时起 24 小时 |
 | 会话 | 绝对有效期 12 小时，每账户最多 20 个，超出淘汰最旧会话 |
@@ -75,10 +81,10 @@ python -m pip install -e 'packages/markitdown[pdf,docx,xlsx]' -e 'packages/marki
 - Argon2id 密码哈希；邀请码及会话只存哈希，邀请单次使用且支持过期/撤销
 - HttpOnly、SameSite=Strict 会话 Cookie；每个已登录写操作校验 CSRF，另有同源 Origin 和自定义请求头检查
 - 登录/注册在密码哈希前做持久化账户/IP 限速；不信任任意 X-Forwarded-For；认证和上传另有限并发入口
-- 每个任务详情、重试、删除、下载、ZIP 项目都按当前会话的用户 ID 检查；管理员没有文件越权通道
+- 每个任务详情、取消、重试、删除、下载、ZIP 项目都按当前会话的用户 ID 检查；管理员没有文件越权通道
 - 不用原始文件名构建磁盘路径；任务 ID、目录、符号链接、ZIP 条目和读取大小均校验
 - Office 压缩包检查解压量、数量、路径、加密与 XML 实体声明，包含非 `.xml` 后缀的 XML 部件；不执行宏
-- 每个文件的转换和预览在限时子进程执行，Unix 上限制 CPU、内存、输出、文件描述符并关闭 core dump；Linux 上父服务退出会杀死解析子进程
+- 每个文件的转换和预览在限时子进程执行，Unix 上限制 CPU、虚拟地址空间、输出、文件描述符并关闭 core dump；Linux 上父服务退出会杀死解析子进程
 - 子进程不继承密钥/代理环境变量，禁用常规 Python 出站连接；导入前设置 `ORT_DISABLE_TELEMETRY=1`，不启用 AI、云转换、URL 转换或插件
 - 预览禁用原始 HTML并净化白名单标签，不加载图片或激活文档链接；原始 Markdown 下载仍应视为不可信内容
 - 同源静态资源，无 CDN/外部字体/遥测；前端不将文档、会话或邀请码放入 localStorage，退出会清空页面中的私有状态
@@ -86,7 +92,9 @@ python -m pip install -e 'packages/markitdown[pdf,docx,xlsx]' -e 'packages/marki
 
 ONNX Runtime 的导入后关闭 API 可能来不及阻止初始化事件，因此必须在初始化前使用环境变量。见 [官方隐私说明](https://github.com/microsoft/onnxruntime/blob/main/docs/Privacy.md#disabling-telemetry)。
 
-**子进程不是 OS 级安全沙箱**。解析器仍以服务用户权限运行；Python socket 防护不是内核网络隔离。Windows 缺少这里的 Unix 资源限制，Linux 的父进程退出保护也不适用于所有平台。不要以高权限运行，不要把此开发服务直接转发到公网。
+Docling 额外在 Linux 子进程使用内核 seccomp 禁网与进程创建限制，但仍没有文件系统沙箱，具体限制见集成说明。
+
+**子进程不是完整 OS 级安全沙箱**。解析器仍以服务用户权限运行；Python socket 防护不是内核网络隔离。Windows 缺少这里的 Unix 资源限制，Linux 的父进程退出保护也不适用于所有平台。不要以高权限运行，不要把此开发服务直接转发到公网。
 
 ## 开发检查
 

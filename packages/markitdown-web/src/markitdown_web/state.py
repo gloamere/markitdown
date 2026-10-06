@@ -35,6 +35,23 @@ class Settings:
     max_file_bytes: int = 20 * 1024 * 1024
     max_attempts: int = 3
     start_workers: bool = True
+    docling_enabled: bool = field(
+        default_factory=lambda: os.environ.get("MARKITDOWN_DOCLING_ENABLED") == "1"
+    )
+    docling_python: Path | None = field(
+        default_factory=lambda: (
+            Path(value)
+            if (value := os.environ.get("MARKITDOWN_DOCLING_PYTHON"))
+            else None
+        )
+    )
+    docling_models: Path | None = field(
+        default_factory=lambda: (
+            Path(value)
+            if (value := os.environ.get("MARKITDOWN_DOCLING_MODELS"))
+            else None
+        )
+    )
 
     def __post_init__(self) -> None:
         root = Path(self.data_dir).expanduser().absolute()

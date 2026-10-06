@@ -1,0 +1,9 @@
+# Runtime artifacts always belong outside this repository.
+.venv/
+.uv-cache/
+models/
+fixtures/
+__pycache__/
+*.pyc
+*.safetensors
+*.part

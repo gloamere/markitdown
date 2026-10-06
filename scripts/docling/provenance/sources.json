@@ -1,0 +1,26 @@
+[
+  {
+    "path": "heron-model-card.md",
+    "source_url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/README.md",
+    "bytes": 3219,
+    "sha256": "175700839bc7808eac6af1d0c23e4f483606ab2276fe01122f4093e61a1a65b6"
+  },
+  {
+    "path": "tableformer-model-card.md",
+    "source_url": "https://huggingface.co/docling-project/docling-models/resolve/fc0f2d45e2218ea24bce5045f58a389aed16dc23/README.md",
+    "bytes": 3413,
+    "sha256": "d17f233378eff1240b623b36da76ee8b40afcca05d505949713bf03f7e00822a"
+  },
+  {
+    "path": "Apache-2.0.txt",
+    "source_url": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+    "bytes": 11358,
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "path": "CDLA-Permissive-2.0.txt",
+    "source_url": "https://raw.githubusercontent.com/spdx/license-list-data/v3.25.0/text/CDLA-Permissive-2.0.txt",
+    "bytes": 2354,
+    "sha256": "4531a67d443284d93ffed0803df5b10634aff21c3d77e381f2d48af01d875868"
+  }
+]
