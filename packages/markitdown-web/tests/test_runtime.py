@@ -52,6 +52,41 @@ def test_authenticated_identity_header_matches_session(client):
     assert response.headers["x-markitdown-user"] == user_id
 
 
+def _observed_process_state(path):
+    try:
+        return path.read_text().rsplit(") ", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        # procfs can report either ENOENT or ESRCH when this read races exit.
+        return None
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError, ProcessLookupError])
+def test_process_exit_observer_accepts_only_confirmed_missing_errors(
+    monkeypatch, failure
+):
+    def read(path):
+        raise failure("Synthetic exited process")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert _observed_process_state(Path("synthetic-stat")) is None
+
+
+def test_process_exit_observer_keeps_permission_denial_visible(monkeypatch):
+    def read(path):
+        raise PermissionError("Synthetic observation denial")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(PermissionError):
+        _observed_process_state(Path("synthetic-stat"))
+
+
+@pytest.mark.parametrize("state", ["S", "Z", "X"])
+def test_process_exit_observer_preserves_observed_state(tmp_path, state):
+    path = tmp_path / "stat"
+    path.write_text(f"101 (synthetic observer) {state} 0")
+    assert _observed_process_state(path) == state
+
+
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux parent-death lifecycle control"
 )
@@ -86,12 +121,8 @@ def test_parser_is_killed_when_service_parent_exits(tmp_path):
         parent.wait(timeout=5)
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
-            stat = Path(f"/proc/{child_pid}/stat")
-            try:
-                process_state = stat.read_text().rsplit(") ", 1)[1].split()[0]
-            except FileNotFoundError:
-                break
-            if process_state == "Z":
+            process_state = _observed_process_state(Path(f"/proc/{child_pid}/stat"))
+            if process_state in {None, "Z", "X"}:
                 break
             time.sleep(0.02)
         else:

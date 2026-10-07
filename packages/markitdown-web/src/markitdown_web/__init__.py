@@ -1,4 +1,4 @@
-"""Local-only web companion; upstream MarkItDown stays unchanged."""
+"""Invitation-only web workspace; upstream MarkItDown stays unchanged."""
 
 import os
 
@@ -6,4 +6,4 @@ import os
 # disable_telemetry_events() after import is too late for initialization events.
 os.environ["ORT_DISABLE_TELEMETRY"] = "1"
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"

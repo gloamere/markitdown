@@ -1,6 +1,6 @@
 # MarkItDown
 
-> **gloamere 二开版（dev）**：新增中文邀请制「资料工作台」，支持账号隔离、持久化任务、Markdown 预览和 ZIP 下载。参见 [Web 快速开始](packages/markitdown-web/README.md) 与 [dev / main 分支策略](docs/BRANCHING.zh-CN.md)。多用户 Web MVP 尚未合并至生产分支或公开部署；下方保留上游说明。
+> **gloamere Web v1.0.0（dev）**：中文邀请制资料工作台，支持账号与任务隔离、批量转换、取消/重试、Markdown 预览/复制/下载、管理员审计及备份恢复。参见 [Web 快速开始](packages/markitdown-web/README.md)、[版本说明](packages/markitdown-web/CHANGELOG.md) 与 [验收记录](docs/V1-VALIDATION.md)。这是 Web 应用版本；上游转换库版本与下方说明保留。main 合并与生产部署仍需另行批准。
 
 [![PyPI](https://img.shields.io/pypi/v/markitdown.svg)](https://pypi.org/project/markitdown/)
 ![PyPI - Downloads](https://img.shields.io/pypi/dd/markitdown)

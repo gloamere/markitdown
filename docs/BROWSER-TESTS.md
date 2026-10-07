@@ -8,17 +8,38 @@ outside pytest's automatic `test_*.py` collection.
 
 ## Current evidence status
 
-The real sandboxed Chromium runner has passed all 12 scenarios in CI, most
-recently on `ba32c373`. Its nine local self-checks also pass. Actual visual review
-and the remaining Mac checks are still pending; automated assertions and
-unreviewed screenshots do not establish visual signoff. The earlier preparation
-VM socket restriction was not bypassed; the separate CI target uses its normal
-host policy and keeps Chromium's sandbox enabled.
+The real sandboxed Chromium runner passed all 12 scenarios on exact
+`f57faf7e1ac5d5a46f5034dd15818f588aa72ce0` in
+[Tests run 37582607189](https://github.com/gloamere/markitdown/actions/runs/37582607189).
+Its nine local self-checks also passed. A separate native Mac Chrome Incognito
+review on the same SHA completed the applicable desktop and 390 × 844 responsive
+visual and interaction checks described below. Broader functional coverage is
+provided by Linux CI. The earlier preparation VM socket restriction was not
+bypassed; the CI target uses its normal host policy and keeps Chromium's sandbox
+enabled.
 
-Passing syntax or self-checks is not a passed browser gate. Running this harness
-successfully still requires a separate review of its actual PNGs. It does not
-replace production isolation, real-model tests, target-host/TLS acceptance,
-external Markdown-consumer verification, or user research.
+Passing syntax or self-checks is not a passed browser gate. Automated assertions
+and unreviewed screenshots do not establish visual signoff. A harness run needs
+separately recorded pixel review for its visual claims; the Mac review is distinct
+from the CI harness's captured-but-unreviewed PNGs. Neither replaces production
+isolation, real-model tests, target-host/TLS acceptance, external Markdown-consumer
+verification, or user research. Final version-bearing CI must still pass before
+creating the immutable release tag; see [V1-VALIDATION](V1-VALIDATION.md).
+
+### Native Mac review on f57faf7
+
+Actual desktop and 390 × 844 responsive screenshots were inspected in native Mac
+Chrome Incognito. Login, invitation, administrator settings, audit, keyboard
+focus, upload queue and preview/source comparison were readable, with no observed
+horizontal overflow. A rapid invitation double-click created exactly one
+invitation and one audit entry. A TXT conversion produced the expected result
+and consumed exactly one quota unit.
+
+The disposable test server, synthetic database and Incognito test window were
+cleaned up; the existing normal service was unaffected. Raw Mac paths,
+screenshots, synthetic inputs and outputs remain private. The 390 × 844 view was
+responsive emulation, not a physical-mobile test; the 320-pixel layout has the
+separate automated CI coverage below, not this native visual signoff.
 
 ## Authorized runner and installation
 
@@ -124,7 +145,8 @@ This first runner does not claim coverage of every timing permutation, native
 clipboard success, every browser/OS, screen-reader behavior, cancellation/reap
 timing, successful retry, or naturally waiting hours for TTL expiry. Existing
 service/unit tests cover other contracts; successful browser flows and visual
-review must still be verified on the exact release candidate.
+review must be tied to the exact reviewed commit. The verified functional and
+visual baseline above does not assert a pass for an untested later release SHA.
 
 ## Evidence and visual sign-off
 
@@ -162,4 +184,5 @@ application checks; later Ubuntu 22.04 runs passed all 12 scenarios.
 The declared Ubuntu 22.04 target keeps Chromium sandboxing enabled and uses its
 normal host policy; it retires on 2027-04-17 and is not a long-term baseline. Failure
 is still blocking. Private Mac review supplies visual evidence; unreviewed CI
-screenshots do not count as visual acceptance.
+screenshots do not count as visual acceptance. The exact `f57faf7` native review
+above supplies the applicable reviewed visual evidence for the v1 baseline.

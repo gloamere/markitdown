@@ -1,12 +1,18 @@
-# Linux production parser boundary (v1 implementation; deployment gate open)
+# Linux production parser boundary for v1.0.0
 
-This is a **deployment contract and image recipe with open runtime gates**, not
-evidence that the service is ready for public use. Initial cloud verification
-ran local conversion, native seccomp and cancellation checks; its existing policy
-blocked production namespace launch. Separately declared Ubuntu 22.04 CI then
-passed the positive boundary and seven standard formats on 8ec3e78. On ba32c373, real lifecycle and all seven Docling smoke stages also passed.
-Remaining release checks are listed in [V1-VALIDATION](V1-VALIDATION.md).
-No host settings were changed or relaxed.
+This deployment contract and image recipe has passed the bounded code-release
+runtime checks on the declared Linux CI target. Exact baseline
+`f57faf7e1ac5d5a46f5034dd15818f588aa72ce0` passed 62 production boundary/lifecycle
+checks, 7/7 standard formats and all seven production Docling stages in
+[Tests run 37582607189](https://github.com/gloamere/markitdown/actions/runs/37582607189).
+Final version-bearing CI remains required before the immutable release tag; see
+[V1-VALIDATION](V1-VALIDATION.md) for finalization and historical evidence.
+
+Target-host acceptance and deployment remain separately authorized work. These
+results do not establish an unknown server's capacity or readiness for public
+use. Initial cloud policy blocked production namespace launch; the separately
+declared Ubuntu 22.04 CI target demonstrated the positive boundary without
+changing or relaxing host security settings. No server was deployed.
 
 ## Local and production are deliberately different
 
@@ -65,7 +71,7 @@ checks a linear fixed-tag/no-attribute grammar without building a Markdown/HTML
 tree. Renderer output remains bounded. Output JSON is never an arbitrary file
 manifest.
 
-## Supervision and remaining resource gate
+## Supervision and target-host resource acceptance
 
 Both engines and the independent preview process poll cancellation and wall time.
 One shared absolute deadline (45 seconds standard / 60 seconds Docling) includes
@@ -92,19 +98,21 @@ cleanup; maintenance must exclude `sandbox.active_workspaces()`.
 RLIMIT_AS is **not** a per-job physical-memory cgroup. RLIMIT_NPROC counts tasks for
 the operating-system UID, so use a dedicated service account and validate thread
 headroom at intended concurrency. RSS checks are sampled and can miss peaks. A live process with unavailable VmRSS
-is an error, never a fabricated zero. The cloud executor exposes status/VmRSS
-but not the per-process children file: local Docling reports direct-parser-process
-measurement, while production fails closed when required wrapper-tree visibility
-is unavailable. Process-only sampling includes all threads in the direct process
-and relies on Docling's seccomp denial of process creation; it is not a general
+is an error, never a fabricated zero. The initial cloud executor exposed
+status/VmRSS but not the per-process children file: local Docling reported
+direct-parser-process measurement, while production fails closed when required
+wrapper-tree visibility is unavailable. Process-only sampling includes all threads
+in the direct process and relies on Docling's seccomp denial of process creation; it is not a general
 descendant-tree measurement.
 Tmpfs caps do not replace host-wide capacity and admission planning. This revision
 does not create delegated per-job cgroups or claim a per-job hard physical-RAM
 limit. Intended-host hard resource/capacity and operational crash-recovery testing
 remains a deployment-acceptance gate, separate from this code release. The code
-release requires its bounded production-profile lifecycle checks on the declared
-CI runtime; CI cannot establish an unknown server's capacity. Keep total service memory/process limits as a separately approved
-operator deployment control; never change host limits merely to make tests pass.
+release's bounded production-profile lifecycle checks passed on the declared
+CI runtime at `f57faf7`; they must also pass for the final version-bearing SHA.
+CI cannot establish an unknown server's capacity. Keep total service memory/process
+limits as a separately approved operator deployment control; never change host
+limits merely to make tests pass.
 
 ## Provision an image (separate approved operator work)
 
@@ -240,7 +248,9 @@ This is temporary validation infrastructure requiring migration, not the intende
 production operating-system decision. The actual deployment host remains unknown
 and unverified. The positive 8ec3e78 isolation/standard-format result applies only to its tested
 image, launcher digest and runner. Physical capacity/TLS remain deployment checks;
-production Docling and real lifecycle integration also passed on ba32c373.
+production Docling and real lifecycle integration passed on `ba32c373` and were
+reverified on the exact `f57faf7` baseline. The historical runtime identities below
+belong only to their named runs; each new build has its own recorded identity.
 
 Sources: [runner retirement](https://github.com/actions/runner-images/issues/14254),
 [Ubuntu namespace policy](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces),
