@@ -8,9 +8,10 @@
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/setup.js && node --test tests/policy.test.cjs",
+    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/setup.js && node --check scripts/build-mac-signed.cjs && node --check tests/launch-app.cjs && node --test tests/policy.test.cjs",
     "test:smoke": "node tests/setup-smoke.cjs",
     "build:mac": "electron-builder --mac --arm64 --publish never",
+    "build:mac:signed": "node scripts/build-mac-signed.cjs",
     "build:win": "electron-builder --win --x64 --publish never"
   },
   "devDependencies": {

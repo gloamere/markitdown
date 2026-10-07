@@ -4,9 +4,9 @@ cd "$(dirname "$0")/.."
 PYTHON="${PYTHON:-.venv/bin/python}"
 # ONNX Runtime 1.29+ needs the opt-out before Python imports it, including tests.
 export ORT_DISABLE_TELEMETRY=1
-"$PYTHON" -m ruff check packages/markitdown-web scripts/docling scripts/evaluate_web.py scripts/stage-desktop-downloads.py scripts/verify-desktop-service.py scripts/verify-product-site.py
+"$PYTHON" -m ruff check packages/markitdown-web scripts/docling scripts/evaluate_web.py scripts/stage-desktop-downloads.py scripts/verify-desktop-service.py scripts/verify-product-site.py scripts/verify-mac-package.py
 "$PYTHON" -m ruff check --config packages/markitdown-web/pyproject.toml scripts/ci scripts/verify_v1_docling.py
-"$PYTHON" -m black --check packages/markitdown-web scripts/docling scripts/ci scripts/evaluate_web.py scripts/verify_v1_docling.py scripts/stage-desktop-downloads.py scripts/verify-desktop-service.py scripts/verify-product-site.py
+"$PYTHON" -m black --check packages/markitdown-web scripts/docling scripts/ci scripts/evaluate_web.py scripts/verify_v1_docling.py scripts/stage-desktop-downloads.py scripts/verify-desktop-service.py scripts/verify-product-site.py scripts/verify-mac-package.py
 "$PYTHON" -m mypy --follow-imports=silent --config-file packages/markitdown-web/pyproject.toml packages/markitdown-web/src
 "$PYTHON" -m pytest -q packages/markitdown-web/tests
 "$PYTHON" scripts/evaluate_web.py --out .venv/synthetic-evaluation

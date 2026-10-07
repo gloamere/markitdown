@@ -2,7 +2,7 @@
 const form = document.getElementById("connect-form"), input = document.getElementById("service-origin"), button = document.getElementById("connect-button"), cancel = document.getElementById("cancel-button"), status = document.getElementById("status");
 let busy = false, sequence = 0;
 function finish() { busy = false; button.disabled = input.disabled = false; cancel.hidden = true; button.textContent = "连接服务 →"; }
-window.desktop.info().then((info) => { input.value = info.origin; document.getElementById("version").textContent = info.version; status.textContent = info.message; }).catch(() => { status.textContent = "无法读取客户端状态，请重新打开应用。"; });
+window.desktop.info().then((info) => { input.value = info.origin; document.getElementById("version").textContent = info.version; status.textContent = info.message; if (info.distribution === "developer-id-unnotarized") document.getElementById("distribution-status").textContent = "预发布测试版本 · Developer ID 已签名 / 未公证"; }).catch(() => { status.textContent = "无法读取客户端状态，请重新打开应用。"; });
 window.desktop.onStatus((message) => { sequence += 1; finish(); status.textContent = message; });
 form.addEventListener("submit", async (event) => {
   event.preventDefault(); if (busy) return;

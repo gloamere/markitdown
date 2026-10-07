@@ -57,6 +57,18 @@ jobs:
           ORT_DISABLE_TELEMETRY: '1'
         run: .venv/bin/python scripts/verify-desktop-service.py --out "${{ runner.temp }}/markitdown-native-evidence"
       - run: npm run ${{ matrix.build }}
+      - name: Verify assembled Mac app connection flow
+        if: runner.os == 'macOS'
+        env:
+          MARKITDOWN_TEST_EXECUTABLE: ${{ github.workspace }}/packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app/Contents/MacOS/MarkItDown
+          MARKITDOWN_TEST_BACKGROUND: '1'
+        run: npm run test:smoke
+      - name: Verify assembled Mac app with a fresh synthetic service
+        if: runner.os == 'macOS'
+        working-directory: .
+        env:
+          ORT_DISABLE_TELEMETRY: '1'
+        run: .venv/bin/python scripts/verify-desktop-service.py --app packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app --out "${{ runner.temp }}/markitdown-packaged-evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: MarkItDown-${{ matrix.os }}-unsigned-${{ github.sha }}

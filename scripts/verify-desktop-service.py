@@ -20,7 +20,7 @@ harness = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness)
 
 
-async def run(output: Path) -> None:
+async def run(output: Path, app: Path | None = None) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="markitdown-desktop-api-") as directory:
         data = Path(directory)
@@ -41,6 +41,11 @@ async def run(output: Path) -> None:
                 "MARKITDOWN_SYNTHETIC_PASSWORD": password,
                 "MARKITDOWN_TEST_EVIDENCE": str(output),
             }
+            if app:
+                executable = app / "Contents/MacOS/MarkItDown"
+                if not executable.is_file():
+                    raise ValueError("Expected an actual macOS MarkItDown.app bundle")
+                environment["MARKITDOWN_TEST_EXECUTABLE"] = str(executable)
             process = await asyncio.create_subprocess_exec(
                 "node",
                 str(ROOT / "packages/markitdown-desktop/tests/service-smoke.cjs"),
@@ -61,5 +66,8 @@ async def run(output: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--app", type=Path, help="Test the actual macOS app bundle")
     arguments = parser.parse_args()
-    asyncio.run(run(arguments.out.resolve()))
+    asyncio.run(
+        run(arguments.out.resolve(), arguments.app.resolve() if arguments.app else None)
+    )

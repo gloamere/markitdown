@@ -1,6 +1,6 @@
 "use strict";
 // Only disposable Electron user data and a synthetic loopback server are used.
-const { _electron } = require("playwright"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path"), http = require("node:http");
+const { launchApp } = require("./launch-app.cjs"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path"), http = require("node:http");
 (async () => {
   const data = await fs.mkdtemp(path.join(os.tmpdir(), "markitdown-desktop-"));
   const output = process.env.MARKITDOWN_TEST_EVIDENCE;
@@ -10,8 +10,11 @@ const { _electron } = require("playwright"), assert = require("node:assert/stric
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let app;
   try {
-    app = await _electron.launch({ args: [path.resolve(__dirname, "..")], env: { ...process.env, MARKITDOWN_TEST_DATA_DIR: data, MARKITDOWN_TEST_BACKGROUND: "1" } });
+    app = await launchApp(data);
     const setup = await app.firstWindow();
+    const info = await setup.evaluate(() => window.desktop.info());
+    await setup.waitForFunction(() => document.getElementById("version").textContent.length > 0);
+    assert((await setup.locator("#distribution-status").textContent()).includes(info.distribution === "developer-id-unnotarized" ? "Developer ID 已签名 / 未公证" : "未签名 / 未公证"));
     await setup.locator("#service-origin").fill("http://remote.example.com");
     await setup.locator("#connect-button").click();
     await setup.waitForFunction(() => document.getElementById("status").textContent.includes("HTTPS"));

@@ -22,7 +22,7 @@ npm run build:win
 安装后 npm audit 报告 0。该依赖仅在构建环境使用，不打入客户端业务代码。
 Windows x64 目标为 NSIS 安装器；支持范围须经真实 Windows 验收。
 本机 arm64 包不代表 Intel Mac / Windows 已测。打包不会自动发布。
-生成包在 `dist/`，文件名带 `unsigned`；没有 Apple Developer 签名、公证、
+默认生成包在 `dist/`，文件名带 `unsigned`；没有 Apple Developer 签名、公证、
 Windows 代码签名或自动更新。系统可能阻止运行。请等待签名版本或在组织
 批准的测试环境评估，不删除 quarantine、不关闭 Gatekeeper/SmartScreen。
 
@@ -49,6 +49,11 @@ webSecurity。导航、重定向、网络请求限定服务 Origin，弹窗和 w
 取消保存不修改任务，文件名不能选目录。不放行证书错误。
 
 ## 分发
+
+已有本机 Developer ID 的独立签名测试、公证认证准备与实际 DMG 验收，见
+[Mac 分发与测试说明](../../docs/MAC-DISTRIBUTION.zh-CN.md)。普通构建与 CI
+仍是 unsigned；单独 `npm run build:mac:signed` 输出到 `dist/developer-id/`，
+明确标记已签名、未公证，不自动改动官网下载。
 
 `.github/workflows/desktop-build.yml` 在 dev 推送/PR 构建未签名测试产物，
 Actions 成功且工件实际存在才可引用。工件需要 GitHub 登录并有保留期限，

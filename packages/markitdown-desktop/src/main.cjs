@@ -15,7 +15,7 @@ let connectionAbort = null;
 const setupURL = "markitdown://desktop/setup.html";
 const settingsPath = () => path.join(app.getPath("userData"), "service.json");
 const preferences = { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, webviewTag: false, allowRunningInsecureContent: false };
-function present(window) { if (!app.isPackaged && process.env.MARKITDOWN_TEST_BACKGROUND === "1") window.showInactive(); else window.show(); }
+function present(window) { if (process.env.MARKITDOWN_TEST_BACKGROUND === "1") window.showInactive(); else window.show(); }
 
 function lockContents(contents, origin) {
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -129,7 +129,7 @@ else {
     session.fromPartition("markitdown-setup").setPermissionRequestHandler((_c, _p, callback) => callback(false));
     session.fromPartition("markitdown-setup").setPermissionCheckHandler(() => false);
     try { const saved = JSON.parse(await fs.readFile(settingsPath(), "utf8")); lastOrigin = serviceOrigin(saved.origin); } catch { /* Only a non-secret service address is remembered. */ }
-    ipcMain.handle("connection-info", (event) => { if (!trustedSetup(event)) throw new Error("Invalid sender"); return { origin: lastOrigin, version: app.getVersion(), message: startupMessage }; });
+    ipcMain.handle("connection-info", (event) => { if (!trustedSetup(event)) throw new Error("Invalid sender"); return { origin: lastOrigin, version: app.getVersion(), message: startupMessage, distribution: require("../package.json").markitdownDistribution || "unsigned" }; });
     ipcMain.handle("connect-service", (event, value) => { if (!trustedSetup(event)) throw new Error("Invalid sender"); return connect(value); });
     ipcMain.handle("cancel-connection", async (event) => { if (!trustedSetup(event)) throw new Error("Invalid sender"); await disconnect(); return { ok: true }; });
     Menu.setApplicationMenu(Menu.buildFromTemplate([

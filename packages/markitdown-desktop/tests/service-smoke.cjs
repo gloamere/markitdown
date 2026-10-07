@@ -1,6 +1,6 @@
 "use strict";
 // Invoked by scripts/verify-desktop-service.py, which owns the server and data.
-const { _electron } = require("playwright"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path");
+const { launchApp } = require("./launch-app.cjs"), assert = require("node:assert/strict"), fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path");
 (async () => {
   const origin = process.env.MARKITDOWN_SYNTHETIC_ORIGIN;
   if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(origin || "") || origin.endsWith(":8765")) throw new Error("Only the owned ephemeral synthetic server is supported");
@@ -9,7 +9,7 @@ const { _electron } = require("playwright"), assert = require("node:assert/stric
   await fs.mkdir(output, { recursive: true });
   let app;
   try {
-    app = await _electron.launch({ args: [path.resolve(__dirname, "..")], env: { ...process.env, MARKITDOWN_TEST_DATA_DIR: data, MARKITDOWN_TEST_BACKGROUND: "1" } });
+    app = await launchApp(data);
     const setup = await app.firstWindow();
     await setup.locator("#service-origin").fill(origin);
     const ready = app.waitForEvent("window");

@@ -38,6 +38,10 @@ Cookie、CSRF、HttpOnly、Origin 检查、所有权、幂等、额度、取消�
 
 ## 安装包和真实下载
 
+2026-10-08 的后续 Mac 签名核实、独立 Developer ID 构建及真实 DMG 测试
+入口见 [Mac 分发与测试说明](MAC-DISTRIBUTION.zh-CN.md)。下述 unsigned
+状态描述本轮官网下载及默认构建，单独签名入口不会自动覆盖它们。
+
 macOS Apple Silicon：DMG 与 ZIP，最低 macOS 12。Windows x64：NSIS EXE。
 本轮均为未签名测试构建，Mac 未公证，没有自动更新。系统可能阻止运行；
 不删除 quarantine、不关闭 Gatekeeper/SmartScreen，不绕过系统警告。
