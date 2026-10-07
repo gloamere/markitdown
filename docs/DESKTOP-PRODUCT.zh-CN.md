@@ -133,3 +133,7 @@ ORT_DISABLE_TELEMETRY=1 .venv/bin/python scripts/verify-desktop-service.py --out
 
 竞品启发、已核实功能与分阶段开发状态见
 [桌面后续设计与调整](DESKTOP-REFINEMENTS.zh-CN.md)。
+
+截至 2026-10-08，四阶段优化已提交 dev；当前应用基线 `015413f` 的完整 CI 与
+Mac 实际打包应用验收已完成，具体范围与未签名/未公证/保存对话框等限制见上述后续设计文档的
+“验证收口”。这不修改 v1.0.0 标签，不表示已正式分发或生产部署。
