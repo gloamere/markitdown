@@ -12,6 +12,51 @@ env:
   UV_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
 
 jobs:
+  browser-e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned optional browser harness and official Chromium
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-browser-test.in
+          .venv/bin/python -m playwright install --with-deps chromium
+      - name: Run fresh-profile synthetic browser flows with Chromium sandbox enabled
+        run: .venv/bin/python packages/markitdown-web/tests/browser_e2e.py --out "${{ runner.temp }}/markitdown-browser-evidence"
+      - name: Preserve synthetic screenshots and machine-readable results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, verified official tag
+        with:
+          name: markitdown-browser-evidence
+          path: ${{ runner.temp }}/markitdown-browser-evidence
+          retention-days: 7
+          if-no-files-found: warn
+
+  production-sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install distro namespace launcher and pinned web test environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-web.lock
+      - name: Verify production boundary without relaxing host policy
+        run: bash scripts/ci/production-sandbox.sh
+
   web-tests:
     runs-on: ubuntu-latest
     steps:
