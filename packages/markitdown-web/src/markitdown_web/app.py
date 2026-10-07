@@ -3,6 +3,7 @@
 import asyncio
 import secrets
 import sqlite3
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote, urlsplit
@@ -18,8 +19,10 @@ from starlette.formparsers import MultiPartException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from . import __version__
 from .auth import AuthError, AuthService
 from .engines import engine_config
+from .governance import GovernanceError
 from .jobs import JobError, JobService
 from .preview import render_preview as render_preview
 from .state import Database, Settings
@@ -37,14 +40,16 @@ SESSION_COOKIE = "markitdown_session"
 
 
 class LocalRequestMiddleware:
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app: ASGIApp, settings: Settings):
         self.app = app
+        self.settings = settings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
         headers = dict(scope["headers"])
+        scope.setdefault("state", {})["request_id"] = uuid.uuid4().hex
         limit = MAX_BODY_BYTES if scope["path"] == "/api/jobs" else MAX_JSON_BYTES
 
         async def safe_send(message: Message) -> None:
@@ -60,6 +65,7 @@ class LocalRequestMiddleware:
                         (b"x-content-type-options", b"nosniff"),
                         (b"referrer-policy", b"no-referrer"),
                         (b"x-frame-options", b"DENY"),
+                        (b"x-request-id", scope["state"]["request_id"].encode("ascii")),
                         (
                             b"content-security-policy",
                             b"default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -68,6 +74,10 @@ class LocalRequestMiddleware:
                         ),
                     ]
                 )
+                if self.settings.deployment_mode == "production":
+                    message["headers"].append(
+                        (b"strict-transport-security", b"max-age=31536000")
+                    )
             await send(message)
 
         async def reject(status: int, detail: str) -> None:
@@ -94,9 +104,13 @@ class LocalRequestMiddleware:
                 try:
                     parsed = urlsplit(origin.decode("ascii"))
                     same_origin = (
-                        parsed.scheme == scope["scheme"]
-                        and parsed.netloc.lower()
-                        == headers.get(b"host", b"").decode("ascii").lower()
+                        (
+                            origin.decode("ascii") == self.settings.public_origin
+                            if self.settings.deployment_mode == "production"
+                            else parsed.scheme == scope["scheme"]
+                            and parsed.netloc.lower()
+                            == headers.get(b"host", b"").decode("ascii").lower()
+                        )
                         and not parsed.path
                         and not parsed.query
                         and not parsed.fragment
@@ -138,7 +152,7 @@ class LoginInput(InputModel):
 
 class RegisterInput(InputModel):
     username: str = Field(min_length=3, max_length=32)
-    password: str = Field(min_length=12, max_length=128)
+    password: str = Field(min_length=6, max_length=128)
     invite_token: str = Field(min_length=16, max_length=128)
 
 
@@ -158,6 +172,19 @@ class ArchiveInput(InputModel):
     job_ids: list[str] = Field(min_length=1, max_length=10)
 
 
+class BusinessChanges(InputModel):
+    default_daily_quota: StrictInt | None = Field(default=None, ge=1, le=1000)
+    default_max_file_bytes: StrictInt | None = Field(
+        default=None, ge=1024 * 1024, le=MAX_FILE_BYTES
+    )
+    retention_seconds: StrictInt | None = Field(default=None, ge=3600, le=604800)
+
+
+class BusinessSettingsInput(InputModel):
+    expected_version: StrictInt = Field(ge=1)
+    changes: BusinessChanges
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
 
@@ -169,7 +196,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         application.state.upload_slots = asyncio.Semaphore(2)
         application.state.auth_slots = asyncio.Semaphore(4)
         application.state.auth = AuthService(database, settings)
-        application.state.jobs = JobService(database, settings)
+        application.state.jobs = JobService(
+            database, settings, application.state.auth.governance.current
+        )
         if settings.start_workers:
             await asyncio.to_thread(application.state.jobs.start)
         try:
@@ -179,6 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="MarkItDown 邀请制工作台",
+        version=__version__,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -186,15 +216,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = settings
     application.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"]
+        TrustedHostMiddleware,
+        allowed_hosts=(
+            [str(urlsplit(settings.public_origin or "").hostname)]
+            if settings.deployment_mode == "production"
+            else ["localhost", "127.0.0.1", "[::1]"]
+        ),
     )
-    application.add_middleware(LocalRequestMiddleware)
+    application.add_middleware(LocalRequestMiddleware, settings=settings)
     application.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @application.exception_handler(AuthError)
     @application.exception_handler(JobError)
-    async def service_error(request: Request, exc: AuthError | JobError):
-        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    @application.exception_handler(GovernanceError)
+    async def service_error(
+        request: Request, exc: AuthError | JobError | GovernanceError
+    ):
+        payload = {"detail": exc.detail}
+        if code := getattr(exc, "code", None):
+            payload["code"] = code
+        return JSONResponse(
+            payload,
+            status_code=exc.status_code,
+        )
 
     @application.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -258,13 +302,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/api/config")
     async def config(request: Request) -> dict:
+        business = await asyncio.to_thread(auth(request).governance.current)
         return {
             "max_file_bytes": settings.max_file_bytes,
             "max_total_bytes": settings.max_total_bytes,
             "max_files": settings.max_files,
             "extensions": list(EXTENSIONS),
             "engines": await asyncio.to_thread(engine_config, settings),
-            "retention_seconds": settings.retention_seconds,
+            "retention_seconds": business["retention_seconds"],
+            "default_daily_quota": business["default_daily_quota"],
+            "default_max_file_bytes": business["default_max_file_bytes"],
+            "history_seconds": settings.history_seconds,
+            "password_min_length": 6,
+            "application_version": __version__,
+            "deployment_mode": settings.deployment_mode,
             "has_admin": await asyncio.to_thread(auth(request).has_admin),
         }
 
@@ -284,6 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 body.password,
                 body.invite_token,
                 client_ip(request),
+                request_id=request.state.request_id,
             )
         return {"user": user}
 
@@ -375,15 +427,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ):
                     raise HTTPException(413, "一批文件总大小不能超过 50 MiB")
                 read_total = 0
-                for upload in uploads:
+                for file_index, upload in enumerate(uploads):
                     filename = safe_filename(upload.filename)
                     suffix = Path(filename).suffix.lower()
                     if suffix not in EXTENSIONS:
-                        errors.append({"filename": filename, "error": "暂不支持此文件格式"})
+                        errors.append(
+                            {
+                                "filename": filename,
+                                "file_index": file_index,
+                                "error": "暂不支持此文件格式",
+                            }
+                        )
                         continue
                     if upload.size is not None and upload.size > max_file_bytes:
                         errors.append(
-                            {"filename": filename, "error": "文件超过当前账户的单文件大小限制"}
+                            {
+                                "filename": filename,
+                                "file_index": file_index,
+                                "error": "文件超过当前账户的单文件大小限制",
+                            }
                         )
                         continue
                     payload = bytearray()
@@ -396,7 +458,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ):
                             raise HTTPException(413, "上传文件超过大小限制")
                     if not payload:
-                        errors.append({"filename": filename, "error": "文件为空"})
+                        errors.append(
+                            {
+                                "filename": filename,
+                                "file_index": file_index,
+                                "error": "文件为空",
+                            }
+                        )
                         continue
                     accepted.append(
                         {"filename": filename, "suffix": suffix, "data": bytes(payload)}
@@ -404,7 +472,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if not accepted:
                     return {"jobs": [], "errors": errors}
                 created = await asyncio.to_thread(
-                    jobs(request).enqueue, user_id, accepted, engine
+                    jobs(request).enqueue,
+                    user_id,
+                    accepted,
+                    engine,
+                    submission_key=request.headers.get("Idempotency-Key"),
                 )
                 return {"jobs": created, "errors": errors}
         except StarletteHTTPException as exc:
@@ -448,11 +520,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @application.get("/api/jobs/{job_id}/manifest")
+    async def manifest(request: Request, job_id: str) -> JSONResponse:
+        current = await session(request)
+        job = await asyncio.to_thread(
+            jobs(request).get_job, current["user"]["id"], job_id
+        )
+        payload = {
+            "manifest_version": 1,
+            "job_id": job["id"],
+            "filename": job["filename"],
+            "source_sha256": job.get("source_sha256"),
+            "engine": job.get("engine"),
+            "status": job["status"],
+            "submission_snapshot": job.get("submission_snapshot"),
+            "attempt_history": job.get("attempt_history", []),
+            "metadata": job.get("metadata", {}),
+            "ocr_enabled": False,
+            "content_quality": "not_assessed",
+            "native_document_json": False,
+        }
+        return JSONResponse(
+            payload,
+            headers={
+                "Content-Disposition": 'attachment; filename="conversion-manifest.json"'
+            },
+        )
+
     @application.post("/api/jobs/{job_id}/retry")
     async def retry(request: Request, job_id: str) -> dict:
         current = await session(request, mutate=True)
         return await asyncio.to_thread(
-            jobs(request).retry, current["user"]["id"], job_id
+            jobs(request).retry,
+            current["user"]["id"],
+            job_id,
+            submission_key=request.headers.get("Idempotency-Key"),
         )
 
     @application.post("/api/jobs/{job_id}/cancel")
@@ -486,7 +588,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not changes:
             raise HTTPException(400, "请提供要修改的额度或状态")
         return await asyncio.to_thread(
-            auth(request).update_user, current["user"]["id"], user_id, **changes
+            auth(request).update_user,
+            current["user"]["id"],
+            user_id,
+            **changes,
+            request_id=request.state.request_id,
         )
 
     @application.get("/api/admin/invites")
@@ -505,15 +611,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             auth(request).create_invite,
             current["user"]["id"],
             ttl_seconds=body.ttl_hours * 3600,
+            request_id=request.state.request_id,
         )
 
     @application.delete("/api/admin/invites/{invite_id}")
     async def revoke_invite(request: Request, invite_id: str) -> dict:
         current = await session(request, mutate=True, admin=True)
         await asyncio.to_thread(
-            auth(request).revoke_invite, current["user"]["id"], invite_id
+            auth(request).revoke_invite,
+            current["user"]["id"],
+            invite_id,
+            request_id=request.state.request_id,
         )
         return {"status": "revoked"}
+
+    @application.get("/api/admin/settings")
+    async def business_settings(request: Request) -> dict:
+        current = await session(request, admin=True)
+        result = await asyncio.to_thread(
+            auth(request).governance.get_settings, current["user"]["id"]
+        )
+        result["maintenance"] = await asyncio.to_thread(jobs(request).cleanup_status)
+        return result
+
+    @application.patch("/api/admin/settings")
+    async def update_business_settings(
+        request: Request, body: BusinessSettingsInput
+    ) -> dict:
+        current = await session(request, mutate=True, admin=True)
+        return await asyncio.to_thread(
+            auth(request).governance.update_settings,
+            current["user"]["id"],
+            body.changes.model_dump(exclude_none=True),
+            expected_version=body.expected_version,
+            request_id=request.state.request_id,
+        )
+
+    @application.get("/api/admin/audit")
+    async def audit_events(request: Request) -> dict:
+        current = await session(request, admin=True)
+        return {
+            "events": await asyncio.to_thread(
+                auth(request).governance.list_audit, current["user"]["id"]
+            )
+        }
 
     return application
 

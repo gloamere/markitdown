@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from markitdown_web import docling_adapter, docling_worker, engines
-from markitdown_web.conversion import ConversionError
+from markitdown_web.conversion import ConversionError, validated_preview
 
 
 @pytest.fixture
@@ -415,7 +415,7 @@ def test_preflight_busy_rejects_without_staging(settings, monkeypatch):
         engines._preflight_slot.release()
 
 
-def test_child_renderer_is_sanitized_and_bounded(settings, monkeypatch):
+def test_parent_renderer_is_sanitized_and_bounded(settings, monkeypatch):
     path = settings.data_dir / "source.pdf"
     path.write_bytes(b"%PDF-test")
     fake = SimpleNamespace(
@@ -436,10 +436,13 @@ def test_child_renderer_is_sanitized_and_bounded(settings, monkeypatch):
     )
     monkeypatch.setattr(docling_worker, "page_count", lambda *a: 1)
     result = docling_worker.run("convert", path, settings.docling_models)
-    assert "<script>" not in result["html"] and "<img" not in result["html"]
+    assert "html" not in result
+    _, preview = validated_preview(result["markdown"])
+    assert "<script>" not in preview and "<img" not in preview
     fake.convert = lambda *a: ("x" * (5 * 1024**2), {})
-    with pytest.raises(docling_adapter.AdapterError, match="output_limit"):
-        docling_worker.run("convert", path, settings.docling_models)
+    with pytest.raises(ConversionError, match="2 MiB"):
+        result = docling_worker.run("convert", path, settings.docling_models)
+        validated_preview(result["markdown"])
 
 
 @pytest.fixture
@@ -588,8 +591,8 @@ def test_teardown_waits_for_confirmed_reap_after_kill(monkeypatch):
 
     process = SimpleNamespace(pid=12345, wait=wait)
     engines._terminate(process)
-    assert [int(item[1]) for item in signals] == [15, 9]
-    assert waits == [{"timeout": 1}, {}]
+    assert [int(item[1]) for item in signals if item[1]] == [15, 9]
+    assert waits == [{"timeout": 0.5}, {}]
 
 
 def test_teardown_signals_group_after_leader_exit(monkeypatch):
@@ -599,4 +602,4 @@ def test_teardown_signals_group_after_leader_exit(monkeypatch):
     )
     process = SimpleNamespace(pid=12345, returncode=0, wait=lambda **kwargs: 0)
     engines._terminate(process)
-    assert len(signals) == 1
+    assert len([item for item in signals if item[1]]) == 2

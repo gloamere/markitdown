@@ -188,11 +188,19 @@ def test_engine_selection_and_safe_metadata_survive_reload(
     assert current["status"] == "succeeded"
     assert current["engine"] == "docling"
     assert current["markdown"] == "# Result"
-    assert current["metadata"] == {
+    expected_metadata = {
         key: value
         for key, value in {**metadata, "duration_seconds": 1.235}.items()
         if key not in {"path", "source"}
     }
+    assert {
+        key: current["metadata"][key] for key in expected_metadata
+    } == expected_metadata
+    assert current["metadata"]["quality_assessment"] == "not_evaluated"
+    assert current["metadata"]["source_sha256"] == result["source_sha256"]
+    assert current["metadata"]["markdown_bytes"] == len(b"# Result")
+    assert len(current["metadata"]["markdown_sha256"]) == 64
+    assert len(current["metadata"]["html_sha256"]) == 64
     assert "private" not in internal_job(service, result["id"])["metadata"]
     update(
         service,

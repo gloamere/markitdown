@@ -1,12 +1,11 @@
 """Standalone isolated-entry worker: no service imports or inherited credentials.
 
-Linux network syscalls are denied with a per-process seccomp filter. This is not
-filesystem isolation; deploy untrusted parsing inside a filesystem sandbox too.
+Production runs in the fixed Linux filesystem/PID/network namespace profile.
+Every mode, including preflight/probe, installs the kernel syscall filter first.
 """
 from __future__ import annotations
 
 import ctypes
-import errno
 import importlib.util
 import json
 import os
@@ -25,7 +24,8 @@ def restrict(mode: str) -> None:
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
         raise RuntimeError("Parent death enforcement failed")
-    if os.getppid() != int(os.environ["MARKITDOWN_PARENT_PID"]):
+    expected_parent = os.environ.get("MARKITDOWN_PARENT_PID")
+    if expected_parent and os.getppid() != int(expected_parent):
         raise RuntimeError("Parent changed")
     small = mode != "convert"
     resource.setrlimit(resource.RLIMIT_CPU, (5 if small else 90,) * 2)
@@ -35,108 +35,11 @@ def restrict(mode: str) -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024,) * 2)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_NOFILE, (128, 128))
+    if os.environ.get("MARKITDOWN_SANDBOX_PROFILE") == "linux-bwrap-v1":
+        resource.setrlimit(resource.RLIMIT_NPROC, (128, 128))
     cpus = sorted(os.sched_getaffinity(0))
     os.sched_setaffinity(0, cpus[:2])
-    sec = ctypes.CDLL("libseccomp.so.2", use_errno=True)
-    sec.seccomp_init.argtypes = [ctypes.c_uint32]
-    sec.seccomp_init.restype = ctypes.c_void_p
-    sec.seccomp_rule_add.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-        ctypes.c_int,
-        ctypes.c_uint,
-    ]
-    sec.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
-    sec.seccomp_syscall_resolve_name.restype = ctypes.c_int
-    sec.seccomp_load.argtypes = [ctypes.c_void_p]
-    sec.seccomp_release.argtypes = [ctypes.c_void_p]
-    context = sec.seccomp_init(0x7FFF0000)  # SCMP_ACT_ALLOW
-    if not context:
-        raise RuntimeError("Network enforcement unavailable")
-    try:
-        for name in (
-            "socket",
-            "socketpair",
-            "connect",
-            "bind",
-            "listen",
-            "accept",
-            "accept4",
-            "sendto",
-            "sendmsg",
-            "sendmmsg",
-            "recvfrom",
-            "recvmsg",
-            "recvmmsg",
-            "io_uring_setup",
-            "io_uring_enter",
-            "io_uring_register",
-            "fork",
-            "vfork",
-            "setsid",
-            "setpgid",
-            "unshare",
-            "setns",
-            "execve",
-            "execveat",
-        ):
-            number = sec.seccomp_syscall_resolve_name(name.encode("ascii"))
-            if (
-                number >= 0
-                and sec.seccomp_rule_add(context, 0x00050000 | errno.EPERM, number, 0)
-                != 0
-            ):
-                raise RuntimeError("Network rule failed")
-
-        class ArgCompare(ctypes.Structure):
-            _fields_ = [
-                ("arg", ctypes.c_uint),
-                ("op", ctypes.c_int),
-                ("datum_a", ctypes.c_uint64),
-                ("datum_b", ctypes.c_uint64),
-            ]
-
-        sec.seccomp_rule_add_array.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint32,
-            ctypes.c_int,
-            ctypes.c_uint,
-            ctypes.POINTER(ArgCompare),
-        ]
-        # Threads are necessary for Torch. Block process clones: CLONE_THREAD
-        # must be set; clone3 cannot inspect pointed-to flags, so force libc's
-        # supported clone fallback using ENOSYS.
-        clone = sec.seccomp_syscall_resolve_name(b"clone")
-        if (
-            clone >= 0
-            and sec.seccomp_rule_add_array(
-                context,
-                0x00050000 | errno.EPERM,
-                clone,
-                1,
-                ctypes.byref(ArgCompare(0, 7, 0x10000, 0)),
-            )
-            != 0
-        ):
-            raise RuntimeError("Process clone restriction failed")
-        clone3 = sec.seccomp_syscall_resolve_name(b"clone3")
-        if (
-            clone3 >= 0
-            and sec.seccomp_rule_add(context, 0x00050000 | errno.ENOSYS, clone3, 0) != 0
-        ):
-            raise RuntimeError("Process clone restriction failed")
-        if sec.seccomp_load(context) != 0:
-            raise RuntimeError("Network enforcement unavailable")
-    finally:
-        sec.seccomp_release(context)
-    # Verify that the actual kernel filter is active, not just a Python patch.
-    libc.socket.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int]
-    descriptor = libc.socket(2, 1, 0)
-    if descriptor >= 0:
-        os.close(descriptor)
-        raise RuntimeError("Network filter not active")
-    if ctypes.get_errno() != errno.EPERM:
-        raise RuntimeError("Network filter not verified")
+    load_module("sandbox").enforce_worker_filter()
 
 
 def load_module(name: str):
@@ -186,10 +89,7 @@ def run(mode: str, source: Path, models: Path) -> dict:
     started = time.monotonic()
     markdown, metadata = adapter.convert(source, models)
     metadata["duration_seconds"] = round(time.monotonic() - started, 3)
-    preview = load_module("preview").render_preview(markdown)
-    if len(preview.encode("utf-8")) > 4 * 1024**2:
-        raise adapter.AdapterError("output_limit")
-    return {"markdown": markdown, "html": preview, "metadata": metadata}
+    return {"markdown": markdown, "metadata": metadata}
 
 
 def main() -> None:

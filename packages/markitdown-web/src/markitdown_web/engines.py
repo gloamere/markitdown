@@ -6,17 +6,21 @@ import json
 import math
 import os
 import shutil
-import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
 
-from .conversion import MAX_HTML_BYTES, MAX_RESULT_BYTES, ConversionError
+from . import sandbox
+from .conversion import (
+    MAX_RESULT_BYTES,
+    ConversionError,
+    ensure_standard_available,
+    validated_preview,
+)
 from .docling_adapter import (
     ASSETS,
     MAX_FILE_BYTES,
@@ -55,7 +59,15 @@ def _error(code: str) -> ConversionError:
 def _paths(settings: Any) -> tuple[Path, Path]:
     if not getattr(settings, "docling_enabled", False) or sys.platform != "linux":
         raise _error("runtime_unavailable")
-    python = getattr(settings, "docling_python", None)
+    python: Any
+    if sandbox.production(settings):
+        try:
+            root, _, image_python = sandbox.runtime_paths(settings, "docling")
+        except (OSError, ValueError, sandbox.SandboxUnavailable) as exc:
+            raise _error("runtime_unavailable") from exc
+        python = root / image_python.lstrip("/")
+    else:
+        python = getattr(settings, "docling_python", None)
     models = getattr(settings, "docling_models", None)
     if python is None or models is None:
         raise _error("runtime_unavailable")
@@ -94,7 +106,7 @@ def _verify_models(models: Path) -> None:
 def _private_temp(settings: Any):
     root = Path(settings.data_dir)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return tempfile.TemporaryDirectory(prefix="engine-", dir=root)
+    return sandbox.private_workspace(root, "engine-")
 
 
 def _environment(directory: Path) -> dict[str, str]:
@@ -119,11 +131,7 @@ def _environment(directory: Path) -> dict[str, str]:
 
 
 def _rss(pid: int) -> int:
-    # Linux-only optional engine fails closed if monitoring becomes unavailable.
-    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-        if line.startswith("VmRSS:"):
-            return int(line.split()[1]) * 1024
-    return 0  # Process may already be a zombie awaiting poll().
+    return sandbox.process_tree_rss(pid)
 
 
 def _scratch_bytes(directory: Path) -> int:
@@ -141,29 +149,18 @@ def _scratch_bytes(directory: Path) -> int:
 
 
 def _terminate(process: subprocess.Popen) -> None:
-    # Signal the group even if its leader has already exited. The child filter
-    # also rejects process creation, so converter threads are the only members.
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        # Keep the physical queue slot until the OS confirms process termination.
-        # An uninterruptible kernel wait must not admit a replacement parser.
-        process.wait()
+    sandbox.terminate(process)
 
 
 def _read_result(output: Path) -> dict:
     descriptor = os.open(output, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as handle:
         info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RESULT_BYTES:
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_size > MAX_RESULT_BYTES
+        ):
             raise _error("output_limit")
         raw = handle.read(MAX_RESULT_BYTES + 1)
     if len(raw) > MAX_RESULT_BYTES:
@@ -182,6 +179,7 @@ def _invoke(
     source: Path,
     directory: Path,
     cancelled: Callable[[], bool],
+    deadline: float | None = None,
 ) -> dict:
     python, models = _paths(settings)
     output = directory / "engine-result.json"
@@ -189,14 +187,28 @@ def _invoke(
     timeout = WALL_SECONDS if mode == "convert" else PREFLIGHT_SECONDS
     rss_limit = RSS_BYTES if mode == "convert" else 512 * 1024**2
     started = time.monotonic()
+    stop_at = (
+        min(started + timeout, deadline) if deadline is not None else started + timeout
+    )
     process: subprocess.Popen | None = None
     try:
         if cancelled():
             raise ConversionError("任务已取消")
+        if started >= stop_at:
+            raise ConversionError("PDF 增强超时，请拆分文档后重试")
         if shutil.disk_usage(directory).free < MIN_FREE_BYTES:
             raise ConversionError("临时存储空间不足，请稍后重试")
-        process = subprocess.Popen(
-            [
+        if sandbox.production(settings):
+            command, env = sandbox.command(
+                settings,
+                engine="docling",
+                mode=mode,
+                source=None if mode == "probe" else source,
+                output=output,
+                models=models,
+            )
+        else:
+            command = [
                 str(python),
                 "-I",
                 "-B",
@@ -205,9 +217,12 @@ def _invoke(
                 str(source),
                 str(output),
                 str(models),
-            ],
+            ]
+            env = _environment(directory)
+        process = subprocess.Popen(
+            command,
             cwd=directory,
-            env=_environment(directory),
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -217,7 +232,7 @@ def _invoke(
         while process.poll() is None:
             if cancelled():
                 raise ConversionError("任务已取消")
-            if time.monotonic() - started > timeout:
+            if time.monotonic() > stop_at:
                 raise ConversionError(f"PDF 增强超时（{timeout} 秒），请拆分文档后重试")
             try:
                 rss = _rss(process.pid)
@@ -237,6 +252,8 @@ def _invoke(
         return _read_result(output)
     except ConversionError:
         raise
+    except sandbox.SandboxUnavailable as exc:
+        raise ConversionError(sandbox.UNAVAILABLE) from exc
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise _error("conversion_failed") from exc
     finally:
@@ -246,13 +263,21 @@ def _invoke(
 
 def ensure_engine_available(engine: str, settings: Any) -> None:
     if engine == "markitdown":
+        ensure_standard_available(settings)
         return
     if engine != "docling":
         raise ConversionError("未知转换引擎")
     try:
         python, models = _paths(settings)
         stamp = python.stat()
-        key = (str(python), stamp.st_mtime_ns, str(models), _model_signature(models))
+        key = (
+            str(python),
+            stamp.st_mtime_ns,
+            str(models),
+            _model_signature(models),
+            sandbox.execution_snapshot(settings, "docling")["sandbox_profile"],
+            str(getattr(settings, "sandbox_runtime_root", "")),
+        )
         with _probe_lock:
             cached = _probe_cache.get(key)
             if cached and time.monotonic() - cached[0] < 30:
@@ -319,6 +344,7 @@ def validate_engine_uploads(
 def run_docling_conversion(
     path: Path, settings: Any, cancelled: Callable[[], bool]
 ) -> tuple[str, str, dict]:
+    deadline = time.monotonic() + WALL_SECONDS
     ensure_engine_available("docling", settings)
     if (
         any(parent.is_symlink() for parent in (path, *path.parents))
@@ -326,8 +352,10 @@ def run_docling_conversion(
     ):
         raise _error("invalid_pdf")
     # Scratch outputs have their own directory, removed on every exit path.
-    with tempfile.TemporaryDirectory(prefix="docling-", dir=path.parent) as temporary:
-        result = _invoke(settings, "convert", path, Path(temporary), cancelled)
+    with sandbox.private_workspace(path.parent, "docling-") as temporary:
+        result = _invoke(
+            settings, "convert", path, Path(temporary), cancelled, deadline
+        )
     markdown, metadata = result.get("markdown"), result.get("metadata")
     if (
         not isinstance(markdown, str)
@@ -354,9 +382,15 @@ def run_docling_conversion(
         or metadata.get("ocr") is not False
     ):
         raise _error("conversion_failed")
-    html = result.get("html")
-    if not isinstance(html, str) or len(html.encode("utf-8")) > MAX_HTML_BYTES:
-        raise _error("output_limit")
+    markdown, html = validated_preview(
+        markdown,
+        settings=settings,
+        cancelled=cancelled,
+        directory=path.parent,
+        deadline=deadline,
+    )
+    if cancelled():
+        raise ConversionError("任务已取消")
     return (
         markdown,
         html,
@@ -373,6 +407,11 @@ def run_docling_conversion(
 
 
 def engine_config(settings: Any) -> list[dict[str, Any]]:
+    standard_reason = ""
+    try:
+        ensure_engine_available("markitdown", settings)
+    except ConversionError as exc:
+        standard_reason = str(exc)
     reason = ""
     try:
         ensure_engine_available("docling", settings)
@@ -382,8 +421,9 @@ def engine_config(settings: Any) -> list[dict[str, Any]]:
         {
             "id": "markitdown",
             "label": "普通转换",
-            "available": True,
-            "reason": "",
+            "available": not standard_reason,
+            "reason": standard_reason,
+            **sandbox.execution_snapshot(settings, "markitdown"),
             "max_pages": None,
             "max_file_bytes": settings.max_file_bytes,
             "timeout_seconds": 45,
@@ -392,6 +432,7 @@ def engine_config(settings: Any) -> list[dict[str, Any]]:
         },
         {
             "id": "docling",
+            **sandbox.execution_snapshot(settings, "docling"),
             "label": "PDF 增强",
             "available": not reason,
             "reason": reason,

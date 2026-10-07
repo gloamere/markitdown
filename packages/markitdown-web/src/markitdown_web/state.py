@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,22 @@ class Settings:
     cookie_secure: bool = field(
         default_factory=lambda: os.environ.get("MARKITDOWN_COOKIE_SECURE") == "1"
     )
+    deployment_mode: str = field(
+        default_factory=lambda: os.environ.get("MARKITDOWN_DEPLOYMENT_MODE", "local")
+    )
+    public_origin: str | None = field(
+        default_factory=lambda: os.environ.get("MARKITDOWN_PUBLIC_ORIGIN") or None
+    )
+    sandbox_runtime_root: Path | None = field(
+        default_factory=lambda: (
+            Path(value)
+            if (value := os.environ.get("MARKITDOWN_SANDBOX_RUNTIME_ROOT"))
+            else None
+        )
+    )
+    sandbox_bwrap: Path = Path("/usr/bin/bwrap")
+    sandbox_python: str = "/usr/bin/python3"
+    sandbox_docling_python: str = "/opt/docling/bin/python"
     global_concurrency: int = 2
     per_user_concurrency: int = 1
     retention_seconds: int = 24 * 60 * 60
@@ -60,6 +77,37 @@ class Settings:
         # Canonicalize trusted ancestors (e.g. macOS /var -> /private/var),
         # while services still reject symlinks within the private data tree.
         object.__setattr__(self, "data_dir", root.resolve())
+        if self.deployment_mode not in {"local", "production"}:
+            raise ValueError("deployment_mode must be local or production")
+        if self.public_origin:
+            parsed = urlsplit(self.public_origin)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or self.public_origin != f"https://{parsed.netloc}"
+                or parsed.netloc != parsed.netloc.lower()
+                or any(c in parsed.netloc for c in "* \\")
+            ):
+                raise ValueError("public_origin must be one exact HTTPS origin")
+            try:
+                parsed.netloc.encode("ascii")
+                parsed.port
+            except (UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "public_origin must use a valid ASCII host/port"
+                ) from exc
+        if self.deployment_mode == "production":
+            if not self.cookie_secure or not self.public_origin:
+                raise ValueError(
+                    "Production requires HTTPS public_origin and Secure cookies"
+                )
+            if self.sandbox_runtime_root is None:
+                raise ValueError("Production requires a dedicated parser runtime root")
         if not 1 <= self.global_concurrency <= 4:
             raise ValueError("global_concurrency must be between 1 and 4")
         if not 1 <= self.per_user_concurrency <= self.global_concurrency:

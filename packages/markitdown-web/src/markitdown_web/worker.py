@@ -9,9 +9,9 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from .conversion import (
-    MAX_HTML_BYTES,
     MAX_MARKDOWN_BYTES,
     MAX_RESULT_BYTES,
+    SAFE_ERRORS,
     ConversionError,
 )
 
@@ -32,7 +32,12 @@ def apply_limits() -> None:
             raise RuntimeError("Cannot enforce parser parent-death cleanup")
         if os.getppid() != int(expected_parent):
             os._exit(1)
-    # Best-effort resource controls on Unix. Windows still has the parent timeout.
+    # Production fails closed; local development retains its explicitly weaker
+    # platform-dependent limit behavior. Namespace cleanup is handled by bwrap.
+    secured = os.environ.get("MARKITDOWN_SANDBOX_PROFILE") == "linux-bwrap-v1"
+    if secured and sys.platform != "linux":
+        raise RuntimeError("Linux production worker required")
+    # Best-effort resource controls only outside the production profile.
     try:
         import resource
 
@@ -41,8 +46,15 @@ def apply_limits() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (1536 * 1024 * 1024,) * 2)
         resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_RESULT_BYTES,) * 2)
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        if secured:
+            resource.setrlimit(resource.RLIMIT_NPROC, (128, 128))
     except (ImportError, ValueError, OSError):
-        pass
+        if secured:
+            raise
+    if secured:
+        from .sandbox import enforce_worker_filter
+
+        enforce_worker_filter()
 
     # Defense in depth for supported Python converters, not a network namespace.
     def deny_network(*args, **kwargs):
@@ -143,19 +155,37 @@ def convert_document(path: Path, suffix: str) -> str:
 def main() -> None:
     apply_limits()
     path, suffix, output = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+    result: dict[str, object]
+    metadata: dict[str, str] | None = None
     try:
-        from .preview import render_preview
+        if os.environ.get("MARKITDOWN_WORKER_MODE") == "probe":
+            import importlib.util
 
-        markdown = convert_document(path, suffix)
-        html = render_preview(markdown)
-        if len(html.encode("utf-8")) > MAX_HTML_BYTES:
-            raise ConversionError("预览结果超过 4 MiB，请拆分文档后重试")
-        result = {"markdown": markdown, "html": html, "error": None}
+            ready = all(
+                importlib.util.find_spec(name) is not None
+                for name in ("markitdown", "onnxruntime", "markdown_it", "bleach")
+            )
+            result = {"ready": ready}
+        else:
+            import importlib.metadata
+
+            metadata = {
+                "version": importlib.metadata.version("markitdown"),
+                "python": sys.version.split()[0],
+            }
+            markdown = convert_document(path, suffix)
+            result = {"markdown": markdown, "error": None}
     except ConversionError as exc:
-        result = {"markdown": "", "html": "", "error": str(exc)}
+        code = next(
+            (key for key, value in SAFE_ERRORS.items() if value == str(exc)),
+            "conversion_failed",
+        )
+        result = {"error": code}
     except Exception:
         # Never return parser tracebacks, file contents or filesystem paths to clients.
-        result = {"markdown": "", "html": "", "error": "无法转换此文件，可能已损坏、加密或格式不受支持"}
+        result = {"error": "conversion_failed"}
+    if metadata is not None:
+        result["metadata"] = metadata
     output.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
 
 
