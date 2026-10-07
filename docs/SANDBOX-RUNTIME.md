@@ -1,10 +1,12 @@
 # Linux production parser boundary (v1 implementation; deployment gate open)
 
 This is a **deployment contract and image recipe with open runtime gates**, not
-evidence that the service is ready for public use. The 2026-10-07 authorized cloud verification could
-run application/local conversion tests, native seccomp tests and cancellation
-checks. The production namespace launch was blocked by that environment's
-existing security policy. No host settings were changed or relaxed.
+evidence that the service is ready for public use. Initial cloud verification
+ran local conversion, native seccomp and cancellation checks; its existing policy
+blocked production namespace launch. Separately declared Ubuntu 22.04 CI then
+passed the positive boundary and seven standard formats on 8ec3e78. The remaining
+fixed lifecycle/Docling checks are listed in [V1-VALIDATION](V1-VALIDATION.md).
+No host settings were changed or relaxed.
 
 ## Local and production are deliberately different
 
@@ -98,16 +100,20 @@ and relies on Docling's seccomp denial of process creation; it is not a general
 descendant-tree measurement.
 Tmpfs caps do not replace host-wide capacity and admission planning. This revision
 does not create delegated per-job cgroups or claim a per-job hard physical-RAM
-limit. Intended-host hard resource/capacity and crash-recovery testing remains a
-G2 release gate. Keep total service memory/process limits as a separately approved
+limit. Intended-host hard resource/capacity and operational crash-recovery testing
+remains a deployment-acceptance gate, separate from this code release. The code
+release requires its bounded production-profile lifecycle checks on the declared
+CI runtime; CI cannot establish an unknown server's capacity. Keep total service memory/process limits as a separately approved
 operator deployment control; never change host limits merely to make tests pass.
 
 ## Provision an image (separate approved operator work)
 
 `deployment/runtime.Dockerfile` is a recipe targeting Linux x86_64 / Python 3.12.14.
 It was built in the separately authorized Ubuntu 22.04 CI job on ae05471. That
-run rejected Docker export mount scaffolding before parser launch; a successful
-build alone is not a passed isolation or conversion gate.
+run rejected Docker export mount scaffolding before parser launch. After the
+confined packaging correction, 8ec3e78 passed 44 sandbox checks (including the
+positive boundary) and all seven standard-format production conversions. These
+results identify a CI runtime, not the intended deployment server.
 Provide immutable digests for the official Python 3.12.14 slim-bookworm image and
 uv 0.12.19 image. No credentials should be included in build arguments or context.
 Pin/review the apt package snapshot as part of release packaging; upstream apt
@@ -232,10 +238,28 @@ OS is not a claim that the failed Ubuntu 24.04 host was repaired or made safe.
 GitHub Ubuntu 22.04 deprecation started on 2026-09-17 and retirement is 2027-04-17.
 This is temporary validation infrastructure requiring migration, not the intended
 production operating-system decision. The actual deployment host remains unknown
-and unverified. Positive results, if obtained, apply only to the exact tested image,
-launcher digest and runner; physical capacity/TLS/production Docling remain distinct.
+and unverified. The positive 8ec3e78 isolation/standard-format result applies only to its tested
+image, launcher digest and runner. Physical capacity/TLS remain deployment checks;
+production Docling and real lifecycle integration checks are tracked separately.
 
 Sources: [runner retirement](https://github.com/actions/runner-images/issues/14254),
 [Ubuntu namespace policy](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces),
 [Jammy bwrap manual](https://manpages.ubuntu.com/manpages/jammy/man1/bwrap.1.html),
 [official pinned release](https://github.com/containers/bubblewrap/releases/tag/v0.13.0).
+
+## Executed CI runtime identity (8ec3e78)
+
+[Production job 112654187833](https://github.com/gloamere/markitdown/actions/runs/37579001936/job/112654187833)
+passed 44 boundary checks and seven standard-format conversions. It used GitHub's
+Ubuntu 22.04.5 image `20260927.309.1`; the exact kernel was not in the fetched log.
+The next run is a separately identified artifact, even if its source is unchanged.
+
+- Runtime image: `sha256:e142399a18e8bb491eb0cf48e50847f1dca7c1753287bb5322e9cfd738851018`
+- Python base: `docker.io/library/python@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e`
+- uv build stage: `ghcr.io/astral-sh/uv@sha256:04d046b13e60d6bcec73cbc5e1cad25d680dea90c8573340950a0ac2d1aef424`
+- Bubblewrap binary: `sha256:4e57a5091d016ed0274d376a11f68b5c267f3752219031da3ee1fecab9e2654c`
+- Preparation `trusted-docker-export-v1`: `/dev` had 3 entries before and 0 after;
+  the other six required targets were already empty. All seven were directories
+
+The source identity is recorded, not an assertion of byte-reproducible apt builds.
+Neither this result nor the image marker authorizes an unknown deployment host.

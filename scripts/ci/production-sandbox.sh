@@ -8,6 +8,9 @@ ROOT=$(mktemp -d "${RUNNER_TEMP:?Run only in an explicitly provisioned disposabl
 command -v docker >/dev/null
 BWRAP="${MARKITDOWN_SANDBOX_BWRAP:-/usr/bin/bwrap}"
 test -x "$BWRAP"
+# Content-free identity of this disposable test host and verified launcher.
+uname -srm
+"$BWRAP" --version
 # Fail before expensive image work if existing namespace capability is denied.
 "$BWRAP" --unshare-all --unshare-user --unshare-cgroup --die-with-parent --ro-bind /usr /usr \
   --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev /usr/bin/true
@@ -50,19 +53,28 @@ trap - EXIT
 "$PYTHON" scripts/ci/prepare_runtime_export.py prepare --workspace "$ROOT" --image-id "$IMAGE"
 # Required opt-in test: once configured, denial is failure, never a skip.
 MARKITDOWN_TEST_RUNTIME_ROOT="$ROOT/runtime-root" \
-  "$PYTHON" -m pytest -q packages/markitdown-web/tests/test_sandbox_contract.py
+  "$PYTHON" -m pytest -q packages/markitdown-web/tests/test_sandbox_contract.py \
+    packages/markitdown-web/tests/test_production_lifecycle.py
 # Exercise real standard formats and the independent preview inside production.
 "$PYTHON" scripts/ci/verify_production_runtime.py --runtime-root "$ROOT/runtime-root" \
   --output "$ROOT/standard-runtime.json"
-# This job proves only its actual checks. Dedicated target-host capacity, TLS and
-# optional Docling production model acceptance remain separately visible gates.
-cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json"
+# Reuse only the existing five revision/checksum-pinned public model assets in a
+# separate fresh build workspace. No token, model download inside a parser, or
+# image/security-policy change is introduced by this bounded integration check.
+mkdir "$ROOT/docling-test"
+"$PYTHON" scripts/docling/download_models.py "$ROOT/docling-test"
+"$PYTHON" scripts/ci/verify_production_docling.py \
+  --runtime-root "$ROOT/runtime-root" --models "$ROOT/docling-test/models" \
+  --image-id "$IMAGE" --output "$ROOT/docling-runtime.json"
+# This job proves only its bounded checks, never dedicated target-host capacity,
+# TLS, quality across a corpus or production deployment acceptance.
+cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json" "$ROOT/docling-runtime.json"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo '### Production sandbox CI evidence'
-    echo 'Executed fixed namespace/isolation tests and real standard conversions.'
+    echo 'Executed fixed isolation/lifecycle checks and real standard/Docling/preview paths.'
     echo 'No kernel/security settings changed; no privileged containers or secrets used.'
-    echo 'Target-host capacity/TLS and production Docling remain separate gates.'
-    echo '```json'; cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json"; echo '```'
+    echo 'Target-host capacity/TLS/deployment and broad quality remain separate gates.'
+    echo '```json'; cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json" "$ROOT/docling-runtime.json"; echo '```'
   } >> "$GITHUB_STEP_SUMMARY"
 fi

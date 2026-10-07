@@ -35,7 +35,8 @@ Obsidian is not installed or driven automatically by this repository.
 
 ## Consumer review checklist
 
-Open the committed Chinese-note `.md` in the chosen destination and compare:
+Regenerate the synthetic Chinese-note `.md` with the evaluation harness, then
+open the owner-held output in the chosen destination and compare:
 heading; two table rows; values 1234.50/80.25; unit/period; escaped pipe remaining
 inside one cell; Chinese characters; code escaping; list/task markers. Reopen the
 saved file with networking off where the consumer supports it, then make a small
