@@ -418,7 +418,9 @@
       await refreshJobs();
     } catch (error) {
       if (!stale(error) && epoch === currentEpoch) {
-        uploadUncertain = !error.status || error.status >= 500;
+        // A rejected replay cannot disprove acceptance of the earlier request.
+        // Keep its key and bytes until reconciliation or explicit abandonment.
+        uploadUncertain = uploadUncertain || !error.status || error.status >= 500;
         if (!uploadUncertain) resetUploadIntent();
         notice(`${message(error)}${uploadUncertain ? "\n上传结果尚未确认。可刷新核对转换记录，或安全重试同一批上传；请求编号保持不变，不会重复计次。" : ""}`); void refreshJobs();
       }
@@ -450,8 +452,13 @@
         retryIntents.delete(id); jobs = jobs.map((item) => String(item.id) === id ? data : item); selectedId = id; clearDocument(); announce(action === "cancel" ? "已请求取消；已用额度不退还，资源可能等待进程退出才释放" : "已重新加入转换队列，使用当前配置并再计一次额度，原到期时间不变");
       }
       await refreshJobs();
-    } catch (error) { if (!stale(error) && epoch === currentEpoch) { if (error.status && error.status < 500) retryIntents.delete(id); notice(message(error)); void refreshJobs(); } }
-    finally { if (epoch === currentEpoch) { jobMutations.delete(id); render(); scheduleTimers(); } }
+    } catch (error) {
+      if (!stale(error) && epoch === currentEpoch) {
+        // Retain the retry key until a confirmed attempt change or success.
+        // A transient rejection may precede the server's idempotency lookup.
+        notice(message(error)); void refreshJobs();
+      }
+    } finally { if (epoch === currentEpoch) { jobMutations.delete(id); render(); scheduleTimers(); } }
   }
 
   function downloadLink(href, filename) { const link = element("a"); link.href = href; link.download = filename; document.body.append(link); link.click(); link.remove(); }

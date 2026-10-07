@@ -405,6 +405,39 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     const calls = app.calls("/api/jobs", "POST"); assert.equal(calls.length, 2); assert.equal(calls[0].options.headers["Idempotency-Key"], calls[1].options.headers["Idempotency-Key"]); assert(calls[0].options.headers["Idempotency-Key"].length >= 16);
     assert.equal(calls[0].options.body.parts[1][1], source); assert.equal(calls[1].options.body.parts[1][1], source); assert.equal(app.ui("history-count").textContent, "1"); assert(app.ui("upload-recheck").hidden); app.stop();
   });
+  await test("rejected safe replays keep the original uncertain upload identity", async () => {
+    for (const rejectedStatus of [400, 403, 409, 429, 503]) {
+      let count = 0; const accepted = new Map();
+      const app = createApp({ me: identity(), config: enhancedConfig, routes: { "POST /api/jobs": (options, state) => {
+        count += 1;
+        if (count === 2) return response({ detail: "Temporary rejection before idempotency lookup" }, rejectedStatus);
+        const key = options.headers["Idempotency-Key"];
+        if (!accepted.has(key)) { accepted.set(key, job(`accepted-${accepted.size + 1}`, "queued", { filename: "once.pdf", engine: "docling" })); state.jobs = [...accepted.values()]; state.usage.used += 1; state.usage.remaining -= 1; }
+        if (count === 1) throw new TypeError("Acceptance response lost");
+        return response({ jobs: [accepted.get(key)], errors: [] }, 202);
+      } } }); await flush();
+      app.ui("engine-docling").emit("change"); const source = file("once.pdf"); app.add(source); app.ui("convert-button").click(); await flush();
+      app.ui("upload-recheck").click(); await flush();
+      assert(!app.ui("upload-recheck").hidden, `Replay ${rejectedStatus} must remain uncertain`);
+      assert(app.ui("convert-button").disabled); assert(app.ui("choose-button").disabled); assert(app.ui("engine-markitdown").disabled);
+      app.ui("upload-recheck").click(); await flush();
+      const calls = app.calls("/api/jobs", "POST"); assert.equal(calls.length, 3);
+      assert.equal(new Set(calls.map((call) => call.options.headers["Idempotency-Key"])).size, 1);
+      for (const call of calls) { assert.equal(call.options.body.parts[1][1], source); assert.equal(call.options.body.parts[0][1], "docling"); }
+      assert.equal(accepted.size, 1); assert.equal(app.state.usage.used, 1); assert.equal(app.ui("history-count").textContent, "1"); assert(app.ui("upload-recheck").hidden); app.stop();
+    }
+  });
+  await test("an initial definitive upload rejection permits a new intent", async () => {
+    const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => response({ detail: "Upload slots busy" }, 429) } }); await flush();
+    app.add(file("first.md")); app.ui("convert-button").click(); await flush(); assert(app.ui("upload-recheck").hidden); assert(!app.ui("choose-button").disabled);
+    app.ui("convert-button").click(); await flush(); const calls = app.calls("/api/jobs", "POST"); assert.notEqual(calls[0].options.headers["Idempotency-Key"], calls[1].options.headers["Idempotency-Key"]); app.stop();
+  });
+  await test("logout during a rejected replay cannot restore the old upload", async () => {
+    const replay = deferred(); let count = 0;
+    const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => { count += 1; if (count === 1) throw new TypeError("Lost response"); return replay.promise; } } }); await flush();
+    app.add(file("private.md")); app.ui("convert-button").click(); await flush(); app.ui("upload-recheck").click(); app.ui("logout-button").click(); await flush(); replay.resolve(response({ detail: "Busy" }, 429)); await flush();
+    assert.equal(app.ui("queue-count").textContent, "0"); assert(app.ui("upload-recheck").hidden); assert(app.ui("session-section").hidden); app.stop();
+  });
   await test("a new intentional upload rotates its key and clearing uncertainty asks first", async () => {
     const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => response({ detail: "Lost response" }, 503) } }); await flush();
     app.add(file("first.md")); app.ui("convert-button").click(); await flush(); app.window.confirmResult = false; app.ui("clear-button").click(); assert.equal(app.ui("queue-count").textContent, "1");
@@ -422,6 +455,16 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     const calls = app.calls("/api/jobs/retry/retry"); assert.equal(calls[0].options.headers["Idempotency-Key"], calls[1].options.headers["Idempotency-Key"]);
     app.state.jobs = [job("retry", "failed", { attempts: 2 })]; app.ui("refresh-button").click(); await flush(); app.history("retry"); await flush();
     assert.notEqual(calls[0].options.headers["Idempotency-Key"], app.calls("/api/jobs/retry/retry")[2].options.headers["Idempotency-Key"]); app.stop();
+  });
+  await test("retry identity survives intervening HTTP rejections until attempt reconciliation", async () => {
+    for (const rejectedStatus of [400, 403, 409, 429]) {
+      let count = 0;
+      const app = createApp({ me: identity(), jobs: [job("retry", "failed")], routes: { "POST /api/jobs/retry/retry": () => { count += 1; return response({ detail: "Response not reconciled" }, count === 2 ? rejectedStatus : 503); } } }); await flush();
+      app.history("retry"); await flush(); app.history("retry"); await flush(); app.history("retry"); await flush();
+      const calls = app.calls("/api/jobs/retry/retry"); assert.equal(calls.length, 3); assert.equal(new Set(calls.map((call) => call.options.headers["Idempotency-Key"])).size, 1);
+      app.state.jobs = [job("retry", "failed", { attempts: 2 })]; app.ui("refresh-button").click(); await flush(); app.history("retry"); await flush();
+      assert.notEqual(calls[0].options.headers["Idempotency-Key"], app.calls("/api/jobs/retry/retry")[3].options.headers["Idempotency-Key"]); app.stop();
+    }
   });
   await test("stopping task remains polled and cannot retry before physical release", async () => {
     const item = job("stop", "failed", { error: "任务已取消", lifecycle_status: "stopping" });
