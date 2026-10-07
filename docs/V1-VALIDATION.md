@@ -36,8 +36,9 @@ real user feedback, hard RSS guarantee or production-isolation result is inferre
    intended-host hard physical-memory/capacity and production Docling checks remain.
 3. Actual browser rendering/clipboard/download/mobile checks are a separate gate.
    This cloud Chromium also failed socket creation; no security bypass was used.
-4. GitHub Actions currently shows zero runs and exact-SHA status lists are empty.
-   Prepared jobs are not executed checks; no repository setting/grant was enabled.
+4. The repository owner has now enabled GitHub Actions (verified 2026-10-07).
+   This checkpoint requests a fresh PR synchronization run; results are pending.
+   Prepared jobs are not executed checks, and no passing CI result is assumed.
 5. nginx/systemd are templates; actual TLS/proxy/target host need separate approved
    staging/rollout work. Production deployment itself is outside this code task.
 
@@ -70,4 +71,6 @@ when user browser interaction required the test session to pause.
 
 The portability repair was additionally checked in the cloud with 104 focused
 passes and one explicit intended-host isolation skip. Counts from overlapping
-suites are not added together. GitHub CI has not run for the prepared jobs.
+suites are not added together. The prepared GitHub jobs still require exact-commit execution and result review.
+The existing pull_request trigger has no branch/path filters; neither a main
+merge nor expanded workflow permissions is needed to request the next run.

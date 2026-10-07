@@ -76,6 +76,7 @@ allowlist excludes service data and secret files, while preserving the original
 upstream Docker build context ([Docker documentation](https://docs.docker.com/build/building/context/#dockerignore-files)).
 
 Preparation and syntax checking are not CI execution. At preparation time the
-repository showed zero workflow runs; Actions availability/authorization must be
-resolved before this job can supply positive evidence. No repository setting was
-silently enabled by this work.
+repository showed zero workflow runs. The repository owner subsequently enabled
+Actions; this checkpoint requests a new PR run. Exact job results must be checked
+before claiming positive evidence. No permissions or secrets were expanded by
+this work, and the application remains loopback-only.
