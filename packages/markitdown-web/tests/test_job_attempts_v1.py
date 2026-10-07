@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 from test_job_service import service as service
@@ -67,6 +68,35 @@ def test_concurrent_submission_replays_reserve_and_charge_only_once(service):
     assert service.get_usage("alice")["used"] == 1
     assert len(list(service.jobs_dir.iterdir())) == 1
     assert len(service.list_attempts("alice", ids[0])) == 1
+
+
+def test_claim_timestamp_follows_submission_committed_while_waiting_for_writer(
+    service, monkeypatch
+):
+    original_transaction = service.db.transaction
+    waiting_submission = []
+    writer_ahead = True
+
+    @contextmanager
+    def transaction_after_submission():
+        nonlocal writer_ahead
+        if writer_ahead:
+            # An upload can obtain SQLite's writer lock before the scheduler,
+            # creating a job after the scheduler has begun trying to claim.
+            writer_ahead = False
+            waiting_submission.append(accepted(service))
+        with original_transaction() as connection:
+            yield connection
+
+    monkeypatch.setattr(service.db, "transaction", transaction_after_submission)
+    claimed = service._claim()
+    assert claimed is not None
+    submitted = waiting_submission[0]
+    assert claimed["id"] == submitted["id"]
+    assert claimed["started_at"] >= submitted["created_at"]
+    attempt = service.list_attempts("alice", submitted["id"])[0]
+    assert attempt["started_at"] >= attempt["accepted_at"]
+    assert service.get_usage("alice")["used"] == 1
 
 
 @pytest.mark.parametrize("changed", ["bytes", "name", "engine", "order"])

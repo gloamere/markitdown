@@ -1464,8 +1464,10 @@ class JobService:
             if "docling" in self._inflight_engines.values()
             else ""
         )
-        now = time.time()
         with self.db.transaction() as connection:
+            # Another writer may submit a job while this worker waits for the
+            # lock. Sample after acquisition so its start cannot predate creation.
+            now = time.time()
             self._expire_due(connection, now)
             for engine, error in unavailable.items():
                 for failed in connection.execute(
