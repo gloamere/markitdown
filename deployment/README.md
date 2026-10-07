@@ -57,3 +57,25 @@ approved retention policy. Record observed restore duration; no RTO/RPO promised
 - [nginx request limits](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html)
 - [nginx proxy header behavior](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)
 - [SQLite backup API](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup)
+
+## Prepared CI production-boundary job
+
+The PR workflow now contains a bounded Ubuntu 24.04 job. It uses existing runner
+Docker access, installs distro Bubblewrap, and first checks required namespaces.
+It does not change sysctl, grant container privileges, add credentials, enable
+unconfined security options or use a weakened fallback. A denied prerequisite
+fails the job. Official Python3.12.14 and uv0.12.19 image versions are checked,
+resolved to immutable repository digests once per run and recorded before build.
+No digest is invented in this repository; the runtime recipe accepts only digests.
+
+The job exports only its newly built image, runs the existing opt-in production
+boundary test and actual seven-format standard/preview checks. It does not claim
+production Docling model validation, intended-host physical capacity or real TLS.
+Image/package provenance is printed to the job summary. The per-Dockerfile context
+allowlist excludes service data and secret files, while preserving the original
+upstream Docker build context ([Docker documentation](https://docs.docker.com/build/building/context/#dockerignore-files)).
+
+Preparation and syntax checking are not CI execution. At preparation time the
+repository showed zero workflow runs; Actions availability/authorization must be
+resolved before this job can supply positive evidence. No repository setting was
+silently enabled by this work.

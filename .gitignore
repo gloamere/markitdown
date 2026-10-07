@@ -168,3 +168,9 @@ src/.DS_Store
 .cursorrules
 # Local multi-user application data: never commit accounts, uploads or sessions.
 .markitdown-data/
+
+# Generated v1 synthetic input/output evidence is retained privately for the owner.
+# Do not accidentally publish raw test artifacts with ordinary code pushes.
+/docs/evidence/v1-docling/
+/docs/evidence/v1-local-evaluation/
+/docs/evidence/v1-validation/
