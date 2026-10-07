@@ -15,6 +15,8 @@ from markitdown_web.conversion import ConversionError
 
 @pytest.fixture
 def settings(tmp_path):
+    # macOS /var is commonly a symlink; trusted runtime fixtures use canonical paths.
+    tmp_path = tmp_path.resolve()
     return SimpleNamespace(
         data_dir=tmp_path,
         docling_enabled=True,
@@ -43,13 +45,50 @@ def test_unknown_engine(engine, settings):
         engines.ensure_engine_available(engine, settings)
 
 
-def test_platform_fails_closed(settings, monkeypatch):
-    monkeypatch.setattr(engines.sys, "platform", "darwin")
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_platform_fails_closed_before_probe_or_parsing(settings, monkeypatch, platform):
+    # Replace this module's platform view, never Python's global sys.platform.
+    monkeypatch.setattr(engines, "sys", SimpleNamespace(platform=platform))
+    for name in ("_model_signature", "_verify_models", "_invoke"):
+        monkeypatch.setattr(
+            engines,
+            name,
+            lambda *a: pytest.fail("Unsupported platform reached runtime"),
+        )
     with pytest.raises(ConversionError, match="尚未就绪"):
         engines.ensure_engine_available("docling", settings)
+    with pytest.raises(ConversionError, match="尚未就绪"):
+        engines.validate_engine_uploads(
+            "docling", [{"suffix": ".pdf", "data": b"%PDF-test"}], settings
+        )
+    with pytest.raises(ConversionError, match="尚未就绪"):
+        engines.run_docling_conversion(
+            settings.data_dir / "source.pdf", settings, lambda: False
+        )
+    config = engines.engine_config(settings)
+    assert config[0]["available"] is True
+    assert config[1]["available"] is False and "尚未就绪" in config[1]["reason"]
+    assert not list(settings.data_dir.glob("engine-*"))
 
 
-def test_model_symlink_rejected(settings):
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_worker_refuses_unsupported_platform_before_limits(monkeypatch, platform):
+    monkeypatch.setattr(docling_worker, "sys", SimpleNamespace(platform=platform))
+    # A regression must never install real seccomp/resource limits in pytest.
+    monkeypatch.setattr(
+        docling_worker.ctypes,
+        "CDLL",
+        lambda *a, **k: pytest.fail("OS enforcement reached"),
+    )
+    with pytest.raises(
+        RuntimeError, match="Linux resource and network enforcement required"
+    ):
+        docling_worker.restrict("probe")
+
+
+def test_model_symlink_rejected(settings, monkeypatch):
+    # Reach the path validation itself even when this unit test runs on macOS.
+    monkeypatch.setattr(engines, "sys", SimpleNamespace(platform="linux"))
     real = settings.data_dir / "real"
     real.mkdir()
     settings.docling_models.symlink_to(real, target_is_directory=True)
@@ -71,6 +110,10 @@ def test_model_signature_size_type_and_hash(settings, monkeypatch):
 
 
 def test_availability_cache_and_invalidation(settings, monkeypatch):
+    # Model a supported, trusted runtime; platform gating is tested separately.
+    monkeypatch.setattr(
+        engines, "_paths", lambda config: (config.docling_python, config.docling_models)
+    )
     settings.docling_models.mkdir()
     asset = settings.docling_models / "asset.bin"
     asset.write_bytes(b"abc")
@@ -186,6 +229,9 @@ def fake_child(tmp_path, settings, monkeypatch):
     monkeypatch.setattr(
         engines, "_paths", lambda settings: (Path(sys.executable), tmp_path)
     )
+    # These children exercise portable timeout/cancel orchestration, not Linux
+    # /proc. Dedicated RSS-threshold tests override this value explicitly.
+    monkeypatch.setattr(engines, "_rss", lambda pid: 0)
     return path
 
 

@@ -4,12 +4,29 @@ permissions:
   contents: read
 
 env:
+  # Opt out before Python imports ONNX Runtime, including conversion tests.
+  ORT_DISABLE_TELEMETRY: "1"
   # Preserve Unicode in captured CLI output on Windows.
   PYTHONUTF8: "1"
   PIP_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
   UV_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
 
 jobs:
+  web-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned web dependencies and local packages
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-web.lock
+          .venv/bin/python -m pip install --no-deps -e ./packages/markitdown -e ./packages/markitdown-web
+      - name: Run web release checks
+        run: bash scripts/check-web.sh
+
   tests:
     runs-on: ${{ matrix.os }}
     strategy:
