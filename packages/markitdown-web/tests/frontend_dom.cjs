@@ -15,6 +15,7 @@ const script = fs.readFileSync(path.join(root, "app.js"), "utf8");
 const NOW = Date.UTC(2026, 9, 5, 12, 0, 0);
 const baseConfig = { max_files: 10, max_file_bytes: 20 * 1048576, max_total_bytes: 50 * 1048576, extensions: [".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv", ".json"], retention_seconds: 86400, has_admin: true };
 const enhancedConfig = { ...baseConfig, engines: [{ id: "markitdown", available: true, max_file_bytes: 20 * 1048576, timeout_seconds: 45 }, { id: "docling", available: true, max_file_bytes: 10 * 1048576, max_pages: 2, timeout_seconds: 60, ocr: false }] };
+const settings = { version: 1, updated_at: NOW / 1000, updated_by: null, defaults: { default_daily_quota: 50, default_max_file_bytes: 20 * 1048576, retention_seconds: 86400 }, current: { default_daily_quota: 50, default_max_file_bytes: 20 * 1048576, retention_seconds: 86400 }, effective: { default_daily_quota: 50, default_max_file_bytes: 20 * 1048576, retention_seconds: 86400 }, bounds: { default_daily_quota: { min: 1, max: 1000 }, default_max_file_bytes: { min: 1048576, max: 20 * 1048576 }, retention_seconds: { min: 3600, max: 604800 } }, deployment: { global_concurrency: 2, max_files: 10 } };
 const baseUser = { id: "u1", username: "member", is_admin: false, is_active: true, daily_quota: 20, max_file_bytes: 10 * 1048576 };
 const identity = (user = {}) => ({ user: { ...baseUser, ...user }, csrf_token: `test-session-${user.id || "u1"}`, usage: { used: 0, daily_quota: 20, remaining: 20, resets_at: NOW / 1000 + 43200, max_file_bytes: user.max_file_bytes || baseUser.max_file_bytes, active_jobs: 0 } });
 const job = (id, status = "succeeded", extra = {}) => ({ id, filename: `file-${id}.md`, status, size_bytes: 40, attempts: 1, created_at: NOW / 1000, expires_at: NOW / 1000 + 86400, error: null, ...extra });
@@ -42,6 +43,7 @@ class Element {
   getAttribute(key) { return this.attributes[key]; }
   addEventListener(kind, fn) { (this.listeners[kind] ??= []).push(fn); }
   emit(kind, options = {}) { for (const fn of this.listeners[kind] || []) fn({ target: this, preventDefault() {}, stopPropagation() {}, ...options }); }
+  select() { this.selected = true; }
   focus() { this.owner.activeElement = this; }
   click() { if (this.disabled) return; if (this.tagName === "A") this.owner.downloads.push({ href: this.href, download: this.download }); this.emit("click"); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((node) => node !== this); }
@@ -54,9 +56,9 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   closest(selector) { return this.matches(selector) ? this : this.parent?.closest(selector) || null; }
 }
-function createApp({ config = baseConfig, me = null, jobs = [], usage, routes = {} } = {}) {
+function createApp({ config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, legacyCopy = false } = {}) {
   const document = { activeElement: null, listeners: {}, downloads: [], addEventListener(kind, fn) { this.listeners[kind] = fn; }, createElement(tag) { return new Element(tag, this); }, createDocumentFragment() { return this.createElement("fragment"); } };
-  document.body = document.createElement("body");
+  document.body = document.createElement("body"); document.execCommand = () => legacyCopy;
   const elements = {};
   for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) { const node = document.createElement(match[1]); node.id = match[3]; node.hidden = /\bhidden\b/.test(match[2]); node.disabled = /\bdisabled\b/.test(match[2]); elements[node.id] = node; }
   document.getElementById = (id) => { assert(elements[id], `Unknown HTML id: ${id}`); return elements[id]; };
@@ -69,13 +71,15 @@ function createApp({ config = baseConfig, me = null, jobs = [], usage, routes = 
     assert(url.startsWith("/api/"), `Non same-origin API request: ${url}`); assert.equal(options.credentials, "same-origin"); assert.equal(options.cache, "no-store");
     requests.push({ url, options }); const key = `${options.method || "GET"} ${url}`;
     if (state.routes[key]) return state.routes[key](options, state);
+    if (key === "GET /api/admin/settings") return response(settings);
+    if (key === "GET /api/admin/audit") return response({ events: [] });
     if (key === "GET /api/config") return response(state.config);
     if (key === "GET /api/me") return state.me ? response(state.me, 200, state.me.user.id) : response({ detail: "Not authenticated" }, 401);
     if (key === "GET /api/jobs") return response({ jobs: state.jobs, usage: state.usage }, 200, state.me?.user.id || "u1");
     if (key === "POST /api/auth/logout") { state.me = null; return response({ status: "ok" }); }
     throw new Error(`Unexpected fetch: ${key}`);
   };
-  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => copies.push(text) } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
+  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController, TextEncoder, crypto: require("node:crypto").webcrypto, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => { if (clipboardFailure) throw new Error("Permission denied"); copies.push(text); } } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
   const ui = (id) => elements[id];
   return { state, ui, document, window, timers, urls, revoked, requests, copies,
     async advance(ms) { const target = time + ms; let guard = 0; while (true) { const due = [...timers].filter(([, value]) => value.at <= target).sort((a, b) => a[1].at - b[1].at)[0]; if (!due) break; assert(++guard < 100, "Timer busy loop"); time = due[1].at; timers.delete(due[0]); due[1].fn(); await flush(); } time = target; },
@@ -319,12 +323,12 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.state.routes["GET /api/jobs/read"] = () => response(detail(job("read"), "Recovered")); app.ui("document-reload").click(); await flush();
     assert(app.ui("document-reload").hidden); assert.equal(app.ui("markdown-source").value, "Recovered"); assert(!app.ui("download-button").disabled); app.stop();
   });
-  await test("ambiguous upload failure blocks accidental duplicate until the user checks history", async () => {
+  await test("ambiguous upload failure freezes payload and safe retry reuses the submission key", async () => {
     const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => response({ detail: "Upload response interrupted" }, 503) } }); await flush();
     app.add(file("uncertain.md")); app.ui("convert-button").click(); await flush();
     assert(app.ui("convert-button").disabled); assert(!app.ui("upload-recheck").hidden); assert(app.ui("notice").textContent.includes("核对转换记录"));
     app.ui("convert-button").emit("click"); assert.equal(app.calls("/api/jobs", "POST").length, 1);
-    app.ui("upload-recheck").click(); assert(!app.ui("convert-button").disabled);
+    app.ui("upload-recheck").click(); await flush(); assert(app.ui("convert-button").disabled); assert.equal(app.calls("/api/jobs", "POST").length, 2); assert.equal(app.calls("/api/jobs", "POST")[0].options.headers["Idempotency-Key"], app.calls("/api/jobs", "POST")[1].options.headers["Idempotency-Key"]);
     app.ui("clear-button").click(); assert(app.ui("upload-recheck").hidden); assert.equal(app.ui("queue-count").textContent, "0"); app.stop();
   });
   await test("partial server rejection keeps the rejected file and can be reconsidered with another engine", async () => {
@@ -358,6 +362,126 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     assert(css.includes("@media (prefers-reduced-motion: reduce)")); assert(css.includes("@media (forced-colors: active)"));
     assert(css.includes(".output-content.is-split")); assert(!css.includes("@import"));
   });
+  await test("six-character authentication boundary is shared by native fields and Unicode-aware JavaScript", async () => {
+    assert.equal((html.match(/minlength="6"/g) || []).length, 2); assert(!html.includes('minlength="12"'));
+    const app = createApp({ routes: { "POST /api/auth/login": () => response({ detail: "Synthetic rejection" }, 400) } }); await flush();
+    app.login("member", "12345"); await flush(); assert.equal(app.calls("/api/auth/login").length, 0); assert(app.ui("auth-message").textContent.includes("6–128"));
+    app.login("member", "123456"); await flush(); assert.equal(app.calls("/api/auth/login").length, 1);
+    app.login("member", "😀😀😀"); await flush(); assert.equal(app.calls("/api/auth/login").length, 1);
+    app.login("member", "😀😀😀😀😀😀"); await flush(); assert.equal(app.calls("/api/auth/login").length, 2); app.stop();
+  });
+  await test("used expired revoked and invalid invitations expose actionable states without account discovery", async () => {
+    const app = createApp(); await flush(); app.ui("register-tab").click(); app.ui("register-username").value = "member"; app.ui("register-password").value = "123456"; app.ui("invite-token").value = "synthetic-only";
+    for (const [code, label] of [["invite_expired", "过期"], ["invite_used", "已使用"], ["invite_revoked", "撤销"], ["invite_invalid", "无效"]]) {
+      app.state.routes["POST /api/auth/register"] = () => response({ detail: "Invitation unavailable", code }, 400);
+      app.ui("register-form").emit("submit"); await flush(); assert(app.ui("auth-message").textContent.includes(label)); assert(app.ui("auth-message").textContent.includes("管理员"));
+    } app.stop();
+  });
+  await test("retention shows real configured duration admission clock and local quota reset", async () => {
+    const app = createApp({ me: identity(), config: { ...baseConfig, retention_seconds: 7200, history_seconds: 2592000 } }); await flush();
+    assert(app.ui("auth-retention").textContent.includes("入队起 2 小时")); assert(app.ui("account-retention").textContent.includes("入队起 2 小时"));
+    assert(app.ui("quota-reset").textContent.includes("UTC 00:00")); assert(app.ui("quota-reset").textContent.includes("本地"));
+    assert(app.ui("history-note").textContent.includes("30 天")); assert(!html.includes("从上传起保留 24 小时"));
+    assert(app.ui("engine-limit-markitdown").textContent.includes("无 2 页硬门槛")); assert(app.ui("engine-limit-markitdown").textContent.includes("OCR 关闭")); app.stop();
+  });
+  await test("safe upload replay preserves bytes engine and key after a lost acceptance response", async () => {
+    let accepted = false;
+    const app = createApp({ me: identity(), config: enhancedConfig, routes: { "POST /api/jobs": (_, state) => { if (!accepted) { accepted = true; state.jobs = [job("once", "queued", { filename: "once.pdf", engine: "docling" })]; throw new TypeError("Connection lost"); } return response({ jobs: state.jobs, errors: [] }, 202); } } }); await flush();
+    app.ui("engine-docling").emit("change"); const source = file("once.pdf"); app.add(source); app.ui("convert-button").click(); await flush();
+    assert(app.ui("choose-button").disabled); app.add(file("other.md")); assert.equal(app.ui("queue-count").textContent, "1"); app.ui("engine-markitdown").emit("change"); assert(app.ui("engine-docling").checked);
+    app.ui("upload-recheck").click(); app.ui("upload-recheck").click(); await flush();
+    const calls = app.calls("/api/jobs", "POST"); assert.equal(calls.length, 2); assert.equal(calls[0].options.headers["Idempotency-Key"], calls[1].options.headers["Idempotency-Key"]); assert(calls[0].options.headers["Idempotency-Key"].length >= 16);
+    assert.equal(calls[0].options.body.parts[1][1], source); assert.equal(calls[1].options.body.parts[1][1], source); assert.equal(app.ui("history-count").textContent, "1"); assert(app.ui("upload-recheck").hidden); app.stop();
+  });
+  await test("a new intentional upload rotates its key and clearing uncertainty asks first", async () => {
+    const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => response({ detail: "Lost response" }, 503) } }); await flush();
+    app.add(file("first.md")); app.ui("convert-button").click(); await flush(); app.window.confirmResult = false; app.ui("clear-button").click(); assert.equal(app.ui("queue-count").textContent, "1");
+    app.window.confirmResult = true; app.ui("clear-button").click(); app.add(file("second.md")); app.ui("convert-button").click(); await flush();
+    assert.notEqual(app.calls("/api/jobs", "POST")[0].options.headers["Idempotency-Key"], app.calls("/api/jobs", "POST")[1].options.headers["Idempotency-Key"]); assert(app.window.confirmations[0].includes("再次计次")); app.stop();
+  });
+  await test("partial errors match duplicate filenames by original file index", async () => {
+    const app = createApp({ me: identity(), routes: { "POST /api/jobs": (_, state) => { state.jobs = [job("accepted", "queued", { filename: "same.md" })]; return response({ jobs: state.jobs, errors: [{ filename: "same.md", file_index: 1, error: "Synthetic rejected file" }] }, 202); } } }); await flush();
+    app.add(file("same.md", 10), file("same.md", 11)); app.ui("convert-button").click(); await flush();
+    assert.equal(app.ui("queue-count").textContent, "1"); assert(app.ui("file-list").textContent.includes("11 B")); assert(app.ui("notice").textContent.includes("不计次")); app.stop();
+  });
+  await test("uncertain retry reuses its key until the confirmed attempt changes", async () => {
+    const app = createApp({ me: identity(), jobs: [job("retry", "failed")], routes: { "POST /api/jobs/retry/retry": () => response({ detail: "Lost retry response" }, 503) } }); await flush();
+    app.history("retry"); await flush(); app.history("retry"); await flush();
+    const calls = app.calls("/api/jobs/retry/retry"); assert.equal(calls[0].options.headers["Idempotency-Key"], calls[1].options.headers["Idempotency-Key"]);
+    app.state.jobs = [job("retry", "failed", { attempts: 2 })]; app.ui("refresh-button").click(); await flush(); app.history("retry"); await flush();
+    assert.notEqual(calls[0].options.headers["Idempotency-Key"], app.calls("/api/jobs/retry/retry")[2].options.headers["Idempotency-Key"]); app.stop();
+  });
+  await test("stopping task remains polled and cannot retry before physical release", async () => {
+    const item = job("stop", "failed", { error: "任务已取消", lifecycle_status: "stopping" });
+    const app = createApp({ me: identity(), jobs: [item] }); await flush(); app.history("select");
+    assert.equal(app.ui("output-label").textContent, "正在停止"); assert(app.ui("document-retry").disabled); assert(app.ui("job-facts-list").textContent.includes("物理进程退出"));
+    assert([...app.timers.values()].some((timer) => timer.delay === 2000)); app.state.jobs = [{ ...item, lifecycle_status: "cancelled" }]; await app.advance(2000); assert(!app.ui("document-retry").disabled); app.stop();
+  });
+  await test("source and attempt provenance are rendered as text with manifest export and no quality guarantee", async () => {
+    const item = job("provenance", "succeeded", { source_sha256: "abcdef", provenance_status: "recorded", quota_charged: true, accepted_attempts: 2, submission_snapshot: { config_version: 1, engine: "markitdown", profile: "<img onerror=1>", engine_version: "1.0" }, attempt_history: [{ id: "attempt-one", sequence: 1, reason: "submission", state: "failed", quota_charged: true, accepted_at: NOW / 1000 }, { id: "attempt-two", sequence: 2, reason: "retry", state: "succeeded", quota_charged: true, accepted_at: NOW / 1000 + 10, snapshot: { config_version: 2, engine: "markitdown", profile: "safe", engine_version: "1.1" } }] });
+    const app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/provenance": () => response(detail(item)) } }); await flush(); app.history("select"); await flush();
+    assert(app.ui("job-facts-list").textContent.includes("abcdef")); assert(app.ui("job-facts-list").textContent.includes("<img onerror=1>")); assert.equal(app.ui("job-facts-list").innerHTML, "");
+    assert.equal(app.ui("attempt-list").children.length, 2); assert(app.ui("attempt-list").textContent.includes("配置版本 2")); assert(!app.ui("result-review").hidden); app.ui("manifest-download").click(); assert.equal(app.document.downloads[0].href, "/api/jobs/provenance/manifest");
+    app.ui("logout-button").click(); await flush(); assert.equal(app.ui("job-facts-list").textContent, ""); assert.equal(app.ui("attempt-list").textContent, ""); assert(app.ui("manifest-download").disabled); app.stop();
+  });
+  await test("clipboard failure tries legacy copy then exposes and selects the manual source", async () => {
+    const item = job("copy"); const app = createApp({ me: identity(), jobs: [item], clipboardFailure: true, routes: { "GET /api/jobs/copy": () => response(detail(item, "Manual source")) } }); await flush(); app.history("select"); await flush(); app.ui("copy-button").click(); await flush();
+    assert(!app.ui("source-panel").hidden); assert(app.ui("markdown-source").selected); assert.equal(app.document.body.children.length, 0); assert(app.ui("notice").textContent.includes("系统复制快捷键")); assert(!app.ui("copy-button").textContent.includes("已复制")); app.stop();
+    const legacy = createApp({ me: identity(), jobs: [item], clipboardFailure: true, legacyCopy: true, routes: { "GET /api/jobs/copy": () => response(detail(item)) } }); await flush(); legacy.history("select"); await flush(); legacy.ui("copy-button").click(); await flush(); assert(legacy.ui("copy-button").textContent.includes("已复制")); legacy.stop();
+  });
+  await test("administrator cannot deactivate self even after DOM tampering and invite TTL is bounded", async () => {
+    const me = identity({ is_admin: true }); const app = createApp({ me, routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [me.user] }), "POST /api/admin/invites": () => response({ token: "synthetic-only", expires_at: NOW / 1000 + 3600 }) } }); await flush(); app.ui("admin-toggle").click(); await flush();
+    const form = app.ui("users-list").querySelector("form"), active = form.querySelector('[data-field="is_active"]'); assert(active.disabled); active.disabled = false; active.checked = false; app.ui("users-list").emit("submit", { target: form }); await flush(); assert.equal(app.calls("/api/admin/users/u1").length, 0); assert(app.ui("admin-status").textContent.includes("不能停用"));
+    app.ui("invite-hours").value = "169"; app.ui("invite-create").click(); await flush(); assert.equal(app.calls("/api/admin/invites", "POST").length, 0);
+    app.ui("invite-hours").value = "168"; app.ui("invite-create").click(); await flush(); assert.equal(JSON.parse(app.calls("/api/admin/invites", "POST")[0].options.body).ttl_hours, 168); app.stop();
+  });
+  await test("bounded defaults show current deployment default scope and atomic expected version", async () => {
+    const patch = deferred(); const app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "PATCH /api/admin/settings": () => patch.promise } }); await flush(); app.ui("admin-toggle").click(); await flush();
+    assert(app.ui("setting-quota-help").textContent.includes("部署默认 50")); assert(app.ui("setting-file-help").textContent.includes("新账户")); assert(app.ui("setting-retention-help").textContent.includes("已有到期时间不变"));
+    app.ui("setting-daily-quota").value = "1001"; app.ui("settings-form").emit("submit"); await flush(); assert.equal(app.calls("/api/admin/settings", "PATCH").length, 0);
+    app.ui("setting-daily-quota").value = "100"; app.ui("setting-retention-hours").value = "1"; app.ui("settings-form").emit("submit"); app.ui("settings-form").emit("submit");
+    assert.equal(app.calls("/api/admin/settings", "PATCH").length, 1); assert(app.ui("settings-save").disabled); assert.deepEqual(JSON.parse(app.calls("/api/admin/settings", "PATCH")[0].options.body), { expected_version: 1, changes: { default_daily_quota: 100, retention_seconds: 3600 } });
+    assert(app.window.confirmations[0].includes("已有账户和任务到期时间不变")); const updated = { ...settings, version: 2, current: { ...settings.current, default_daily_quota: 100, retention_seconds: 3600 }, effective: { ...settings.effective, default_daily_quota: 100, retention_seconds: 3600 } }; patch.resolve(response(updated)); await flush();
+    assert(app.ui("settings-status").textContent.includes("已保存配置版本 2")); assert(app.ui("account-retention").textContent.includes("入队起 1 小时")); assert(!app.ui("settings-save").disabled); app.stop();
+  });
+  await test("settings conflict refreshes values atomically and never overwrites newer config silently", async () => {
+    let changed = false; const fresh = { ...settings, version: 4, current: { ...settings.current, default_daily_quota: 75 } };
+    const app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "GET /api/admin/settings": () => response(changed ? fresh : settings), "PATCH /api/admin/settings": () => { changed = true; return response({ detail: "Configuration changed" }, 409); } } }); await flush(); app.ui("admin-toggle").click(); await flush(); app.ui("setting-daily-quota").value = "60"; app.ui("settings-form").emit("submit"); await flush();
+    assert.equal(app.ui("setting-daily-quota").value, "75"); assert(app.ui("settings-version").textContent.includes("版本 4")); assert(app.ui("settings-status").textContent.includes("本次未保存")); assert.equal(app.calls("/api/admin/settings", "PATCH").length, 1); assert(!app.ui("settings-save").disabled); app.stop();
+  });
+  await test("unsaved settings edits survive unrelated administrator refresh without advancing base version", async () => {
+    let changed = false; const fresh = { ...settings, version: 3, current: { ...settings.current, default_daily_quota: 70 } };
+    const app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "GET /api/admin/settings": () => response(changed ? fresh : settings), "PATCH /api/admin/settings": () => response({ detail: "Conflict" }, 409) } }); await flush(); app.ui("admin-toggle").click(); await flush();
+    app.ui("setting-daily-quota").value = "60"; app.ui("setting-daily-quota").emit("input"); changed = true; app.ui("admin-refresh").click(); await flush(); assert.equal(app.ui("setting-daily-quota").value, "60"); app.ui("settings-form").emit("submit"); await flush();
+    assert.equal(JSON.parse(app.calls("/api/admin/settings", "PATCH")[0].options.body).expected_version, 1); app.stop();
+  });
+  await test("audit records are content-safe text and late settings cannot repopulate logout", async () => {
+    const patch = deferred(); const event = { action: "user.update", actor_id: "actor", target_type: "user", target_id: "target", created_at: NOW / 1000, before: { daily_quota: 10 }, after: { daily_quota: "<img onerror=1>" }, result: "success", request_id: "request-one" };
+    const app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "GET /api/admin/audit": () => response({ events: [event] }), "PATCH /api/admin/settings": () => patch.promise } }); await flush(); app.ui("admin-toggle").click(); await flush();
+    assert(app.ui("audit-list").textContent.includes("<img onerror=1>")); assert.equal(app.ui("audit-list").innerHTML, ""); assert(app.ui("service-config").textContent.includes("只" ) || app.ui("service-config").textContent.includes("不可"));
+    app.ui("setting-daily-quota").value = "60"; app.ui("settings-form").emit("submit"); app.ui("logout-button").click(); await flush(); patch.resolve(response({ ...settings, version: 2 })); await flush(); assert.equal(app.ui("audit-list").children.length, 0); assert.equal(app.ui("service-config").children.length, 0); assert.equal(app.ui("setting-daily-quota").value, ""); assert(app.ui("settings-save").disabled); app.stop();
+  });
+
+  await test("usage refresh adopts changed retention and actual attempt limit without changing existing expiry", async () => {
+    const initial = identity(); initial.usage.retention_seconds = 7200; initial.usage.config_version = 3; initial.usage.max_attempts = 2;
+    const item = job("limit", "failed", { attempts: 2, attempt_history_complete: false, accepted_attempts: 0 });
+    const app = createApp({ me: initial, jobs: [item] }); await flush(); app.history("select");
+    assert(app.ui("account-retention").textContent.includes("入队起 2 小时")); assert(app.ui("document-retry").disabled); assert(app.ui("job-facts-list").textContent.includes("旧任务历史不完整"));
+    const oldExpiry = app.ui("document-expiry").textContent; app.state.usage = { ...initial.usage, retention_seconds: 3600 }; app.ui("refresh-button").click(); await flush();
+    assert(app.ui("account-retention").textContent.includes("入队起 1 小时")); assert.equal(app.ui("document-expiry").textContent, oldExpiry); app.stop();
+  });
+  await test("all static IDs are unique and label and ARIA references exist", async () => {
+    const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]); assert.equal(new Set(ids).size, ids.length);
+    for (const match of html.matchAll(/\b(?:for|aria-controls|aria-describedby|aria-labelledby)="([^"]+)"/g)) for (const ref of match[1].split(" ")) assert(ids.includes(ref), `Missing referenced element ${ref}`);
+    assert(html.includes("不等于安全擦除")); assert(html.includes("不是原生 DoclingDocument")); assert(html.includes("没有网页改密"));
+  });
+
+  await test("expired history exports metadata manifest while content actions remain unavailable", async () => {
+    const app = createApp({ me: identity(), jobs: [job("expired-manifest", "expired", { expires_at: NOW / 1000 - 1 })] }); await flush(); app.history("select");
+    assert(app.ui("download-button").disabled); assert(app.ui("copy-button").disabled); assert(!app.ui("manifest-download").disabled); assert(app.ui("job-facts-list").textContent.includes("仅现存处理清单"));
+    app.ui("manifest-download").click(); assert.equal(app.document.downloads[0].href, "/api/jobs/expired-manifest/manifest"); app.stop();
+  });
+
   assert(!script.includes("localStorage") && !script.includes("sessionStorage"));
   assert.equal((script.match(/\.innerHTML\s*=/g) || []).length, 1, "Only sanitized server preview may become HTML");
   assert(!html.match(/(?:src|href)="https?:/));
