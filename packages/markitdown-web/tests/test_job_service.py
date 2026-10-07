@@ -10,7 +10,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -232,6 +232,58 @@ def test_zip_validates_every_owner_and_uses_safe_unique_names(service):
         with pytest.raises(JobError) as error:
             service.archive("alice", ids)
         assert error.value.status_code == status
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "资" * 160 + ".txt",
+        "🧭" * 160 + ".txt",
+        "CON.txt",
+        "nul.notes.txt",
+        "COM¹.txt",
+        "LPT².txt",
+        "CON .notes.txt",
+        "AUX .notes.txt",
+        "COM¹ .notes.txt",
+        "CONIN$.txt",
+        "CONOUT$.txt",
+    ],
+)
+def test_exports_use_portable_names_without_changing_source_identity(
+    service, tmp_path, source
+):
+    result = job(service, filename=source)
+    finish(service, result["id"])
+    recorded = service.get_job("alice", result["id"])["filename"]
+    filename, data = service.download("alice", result["id"])
+    assert filename.endswith(".md")
+    assert len(filename.encode("utf-8")) <= 180
+    assert not PureWindowsPath(filename).is_reserved()
+    target = tmp_path / filename
+    target.write_bytes(data)
+    assert target.read_bytes() == b"# Hello"
+    with zipfile.ZipFile(
+        io.BytesIO(service.archive("alice", [result["id"]]))
+    ) as archive:
+        member = archive.namelist()[0]
+        assert len(member.encode("utf-8")) <= 200
+        archive.extractall(tmp_path / "extracted")
+        assert (tmp_path / "extracted" / member).read_bytes() == data
+    assert service.get_job("alice", result["id"])["filename"] == recorded
+
+
+def test_truncated_unicode_exports_keep_unique_zip_members(service, tmp_path):
+    first = job(service, filename="资" * 150 + "甲.txt")
+    second = job(service, filename="资" * 150 + "乙.txt")
+    for result in (first, second):
+        finish(service, result["id"])
+    with zipfile.ZipFile(
+        io.BytesIO(service.archive("alice", [first["id"], second["id"]]))
+    ) as archive:
+        assert len(set(archive.namelist())) == 2
+        archive.extractall(tmp_path / "extracted")
+        assert len(list((tmp_path / "extracted").iterdir())) == 2
 
 
 def test_expiry_denies_content_then_cleanup_removes_history(service):

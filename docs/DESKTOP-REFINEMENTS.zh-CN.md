@@ -75,6 +75,10 @@ Electron 已安装，但实际 smoke 同样被运行环境拒绝 socket()，
 使用相同 key/对象/引擎，模拟服务只入队和扣额一次；新尝试能轮换键。
 已有部分成功、显式放弃与退出隔离回归继续通过。
 没有更改后端额度、身份校验，也没有增加浏览器持久化文档。
+阶段二远端提交 cc41f6976894ffbf890c91a250cb8831009868f9 的
+[完整测试](https://github.com/gloamere/markitdown/actions/runs/37674371254)、
+[桌面构建](https://github.com/gloamere/markitdown/actions/runs/37674371265)、
+[pre-commit](https://github.com/gloamere/markitdown/actions/runs/37674371280) 均通过。
 
 ### 第三阶段：较晚响应尊重新的操作（已实现）
 
@@ -90,11 +94,27 @@ Electron 已安装，但实际 smoke 同样被运行环境拒绝 socket()，
 导航离开再返回、阅读模式选择、邀请码隐藏；69 组 DOM 场景全部通过。
 原有正常复制回退、选择/退出隐私和键盘焦点场景继续通过。
 
-### 第四阶段：可移植导出与回归（待审查）
+### 第四阶段：可移植导出（已实现）
 
-审查超长 Unicode、Windows 保留文件名、实际保存名与 ZIP 对应关系。
-仅在真实缺口成立时更改，并验证 UTF-8 字节长度、扩展名、同名/遍历防御、原文保真。
-如不成立只补测试，不为实现功能而重做已有安全命名。
+实际复现：160 个中文字符的下载建议名为 483 个 UTF-8 字节，在云端临时目录
+保存报 ENAMETOOLONG；旧桌面截断还会丢掉超长 ASCII 文件名的 .md 扩展名。
+CON.md 等名违反 Windows 保留名规则。
+
+调整：下载建议名限制为 180 UTF-8 字节，完整保留输出扩展名，不切断 Unicode 字符；
+Windows 设备保留名加 document- 前缀。桌面建议名同时清理尾点/空格与方向控制符。
+ZIP 沿用任务 ID/序号区分条目，加入此后缀后仍低于 200 字节；不改变源文件展示名、
+原文内容、任务 ID、源哈希、计次或文件保留策略。
+
+验收：首批 7 个新增服务用例在修复前全部失败；独立复核后补充 5 个设备别名/空格用例。
+实际保存、ZIP 解压、
+长中文/emoji、保留名、截断后同名的不同任务和原始记录保持均有回归。
+桌面另有 UTF-8/扩展名、设备保留名和当前平台实际创建文件测试。
+这是安全的建议文件名，不承诺任意用户选择的完整路径都可写；
+桌面保存/覆盖仍由系统对话框处理，网页下载由浏览器策略决定。
+
+技术来源：[Windows 文件命名规则](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)、
+[Electron DownloadItem](https://www.electronjs.org/docs/latest/api/download-item/)。
+不增加“完整归档”或图片资产等尚未实现的宣传。
 
 ## 明确延期
 

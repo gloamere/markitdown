@@ -21,3 +21,36 @@ test("server names cannot choose an output directory", () => {
   assert.equal(safeFilename("C:\\private\\document.md"), "document.md");
   assert.equal(safeFilename(".."), "document.md");
 });
+
+test("suggested export names preserve extensions within a UTF-8 byte budget", () => {
+  for (const base of ["x".repeat(300), "资".repeat(160), "🧭".repeat(160), "é".repeat(160)]) for (const extension of [".md", ".json", ".zip"]) {
+    const name = safeFilename(base + extension);
+    assert(Buffer.byteLength(name, "utf8") <= 180);
+    assert(name.endsWith(extension));
+    assert(!name.includes("\uFFFD"));
+  }
+  assert.equal(safeFilename("notes.md"), "notes.md");
+});
+test("suggested export names avoid Windows devices and trailing dot or space aliases", () => {
+  for (const device of ["CON", "prn", "AUX", "nul", "COM1", "COM9", "COM¹", "LPT1", "LPT²", "LPT³", "CONIN$", "CONOUT$"]) {
+    assert.equal(safeFilename(`${device}.md`), `document-${device}.md`);
+    assert.equal(safeFilename(`${device}.notes.md`), `document-${device}.notes.md`);
+    assert.equal(safeFilename(`${device} .notes.md`), `document-${device} .notes.md`);
+  }
+  assert.equal(safeFilename("name.md... "), "name.md");
+  assert.equal(safeFilename(" .. "), "document.md");
+  assert.equal(safeFilename("a\u202Eb.md"), "a_b.md");
+  assert.equal(safeFilename("COM10.md"), "COM10.md");
+  assert.equal(safeFilename("CON" + " ".repeat(200) + "notes.md"), "document-CON.md");
+});
+test("suggested export names can be created on the current platform", () => {
+  const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "markitdown-name-"));
+  try {
+    for (const source of ["资".repeat(160) + ".md", "🧭".repeat(160) + ".json", "CON.md", "LPT².notes.md", "report.md... "]) {
+      const target = path.join(directory, safeFilename(source));
+      fs.writeFileSync(target, "synthetic export");
+      assert.equal(fs.readFileSync(target, "utf8"), "synthetic export");
+    }
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

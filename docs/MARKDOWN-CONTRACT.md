@@ -46,3 +46,13 @@ Do not load arbitrary local/remote HTML or image resources from unknown document
 Specification references (syntax context, not product acceptance evidence):
 [GitHub Flavored Markdown](https://github.github.com/gfm/),
 [Obsidian Markdown](https://help.obsidian.md/Editing+and+formatting/Basic+formatting+syntax)
+
+## Portable suggested export names
+
+Markdown downloads keep a `.md` extension within a 180-byte UTF-8 filename budget.
+Windows reserved device names receive a `document-` prefix. ZIP members retain the
+existing job-ID/index suffix so different jobs do not collide after truncation.
+Source display names, hashes and Markdown bytes are unchanged. Desktop save-dialog
+suggestions also preserve `.json`/`.zip` extensions and remove trailing dot/space
+aliases. This does not guarantee an arbitrary user-selected destination path is writable
+or bypass the operating system's overwrite confirmation.

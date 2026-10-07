@@ -72,6 +72,31 @@ def _filename(raw: str) -> str:
     return (stem[:160].strip(" .") or "document") + suffix[:16]
 
 
+def _export_filename(raw: str) -> str:
+    """Keep suggested download components portable without renaming the source."""
+    name = _filename(raw)
+    suffix = Path(name).suffix
+    stem = name[: -len(suffix)] if suffix else name
+    # Leave room for the ZIP task-ID/index suffix as well as .md. Count UTF-8
+    # bytes, not Unicode code points; never split a multi-byte character.
+    budget = 180 - len(suffix.encode("utf-8"))
+    stem = stem.encode("utf-8")[:budget].decode("utf-8", errors="ignore").rstrip(" .")
+    # Windows reserves these basenames even when followed by an extension.
+    # Check after shortening so trimming cannot create a reserved alias.
+    if re.fullmatch(
+        r"(?:CON|CONIN\$|CONOUT\$|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])",
+        stem.split(".", 1)[0].rstrip(" "),
+        re.I,
+    ):
+        stem = (
+            ("document-" + stem)
+            .encode("utf-8")[:budget]
+            .decode("utf-8", errors="ignore")
+            .rstrip(" .")
+        )
+    return (stem or "document") + suffix
+
+
 def _day(now: float) -> str:
     return datetime.fromtimestamp(now, timezone.utc).date().isoformat()
 
@@ -1099,7 +1124,7 @@ class JobService:
         if row["status"] != "succeeded":
             raise JobError(409, "任务尚未完成")
         data = self._read(self._job_dir(job_id) / "markdown.md", MAX_MARKDOWN_BYTES)
-        return _filename(Path(row["filename"]).stem + ".md"), data
+        return _export_filename(Path(row["filename"]).stem + ".md"), data
 
     def download(self, user_id: str, job_id: str) -> tuple[str, bytes]:
         with self.db.transaction() as connection:

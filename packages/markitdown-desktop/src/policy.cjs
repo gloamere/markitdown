@@ -23,8 +23,23 @@ function allowedDownload(value, origin) {
 }
 
 function safeFilename(value) {
-  const name = String(value || "document.md").split(/[\\/]/).pop().replace(/[<>:"|?*\x00-\x1f]/g, "_");
-  return name && name !== "." && name !== ".." ? name.slice(0, 180) : "document.md";
+  const name = String(value || "document.md").split(/[\\/]/).pop().replace(/[\p{C}<>:"|?*]/gu, "_").replace(/^[ .]+|[ .]+$/g, "");
+  if (!name) return "document.md";
+  const suffix = name.match(/\.[a-z0-9]{1,16}$/i)?.[0] || "";
+  const budget = 180 - Buffer.byteLength(suffix, "utf8");
+  const bound = (value) => {
+    let result = "", size = 0;
+    for (const character of value) {
+      const length = Buffer.byteLength(character, "utf8");
+      if (size + length > budget) break;
+      result += character; size += length;
+    }
+    return result.replace(/[ .]+$/g, "") || "document";
+  };
+  let stem = bound(suffix ? name.slice(0, -suffix.length) : name);
+  // Check after shortening: trimming a long space run can itself create CON.
+  if (/^(?:CON|CONIN\$|CONOUT\$|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])$/i.test(stem.split(".", 1)[0].trimEnd())) stem = bound(`document-${stem}`);
+  return stem + suffix;
 }
 
 module.exports = { serviceOrigin, sameService, allowedDownload, safeFilename };
