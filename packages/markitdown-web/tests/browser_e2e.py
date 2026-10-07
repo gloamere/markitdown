@@ -212,6 +212,7 @@ class Evidence:
                 height: innerHeight, device_scale_factor: devicePixelRatio})"""
         )
         path = artifact_path(self.output, f"screenshots/{label}.png")
+        await page.evaluate("window.scrollTo(0, 0)")
         await page.screenshot(path=str(path), full_page=True, animations="disabled")
         require(
             path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"), "Screenshot is not PNG"
@@ -542,7 +543,7 @@ async def exercise(
             },
             locale="zh-CN",
             timezone_id="UTC",
-            color_scheme="dark",
+            color_scheme="light",
             is_mobile=mobile,
             has_touch=mobile,
             accept_downloads=True,
@@ -577,7 +578,7 @@ async def exercise(
     first_path, second_path = write_fixtures(scratch)
     try:
         with evidence.step(STEPS[1]):
-            await admin.goto("/")
+            await admin.goto("/app")
             await expect(admin.locator("#login-button")).to_be_enabled()
             await admin.keyboard.press("Tab")
             await expect(admin.locator(".skip-link")).to_be_focused()
@@ -593,7 +594,7 @@ async def exercise(
 
         with evidence.step(STEPS[2]) as check:
             token, invite = await invitation(admin, expect, repeated=True)
-            await user.goto("/")
+            await user.goto("/app")
             await register(user, "synthetic-reader", token, expect)
             reused = await api(
                 user,
@@ -614,7 +615,7 @@ async def exercise(
                     rejected["status"] == 422, "Out-of-bounds invitation TTL accepted"
                 )
             token2, _ = await invitation(admin, expect, hours=168)
-            await other.goto("/")
+            await other.goto("/app")
             await register(other, "synthetic-other", token2, expect)
             check["details"] = {
                 "password_characters": len(USER_PASSWORD),
@@ -840,7 +841,7 @@ async def exercise(
         with evidence.step(STEPS[8]) as check:
             current = await api_ok(admin, "/api/admin/settings")
             stale_admin = await admin_context.new_page()
-            await stale_admin.goto("/")
+            await stale_admin.goto("/app")
             await expect(stale_admin.locator("#session-section")).to_be_visible()
             await open_admin(stale_admin, expect)
             await stale_admin.locator("#setting-daily-quota").fill("73")
@@ -914,7 +915,7 @@ async def exercise(
             token3, _ = await invitation(admin, expect)
             fresh_context = await new_context()
             fresh = await fresh_context.new_page()
-            await fresh.goto("/")
+            await fresh.goto("/app")
             await register(fresh, "synthetic-new-defaults", token3, expect)
             new_user = (await api_ok(fresh, "/api/me"))["user"]
             require(
@@ -1039,7 +1040,7 @@ async def exercise(
         with evidence.step(STEPS[11]):
             mobile_context = await new_context(mobile=True)
             mobile = await mobile_context.new_page()
-            await mobile.goto("/")
+            await mobile.goto("/app")
             await expect(mobile.locator("#login-button")).to_be_enabled()
             await evidence.screenshot(mobile, "mobile-390-login")
             await login(mobile, "synthetic-reader", USER_PASSWORD, expect)

@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import __version__
 from .auth import AuthError, AuthService
+from .distribution import downloads
 from .engines import engine_config
 from .governance import GovernanceError
 from .jobs import JobError, JobService
@@ -69,7 +70,13 @@ class LocalRequestMiddleware:
                         (
                             b"content-security-policy",
                             b"default-src 'none'; script-src 'self'; style-src 'self'; "
-                            b"connect-src 'self'; img-src 'none'; font-src 'none'; "
+                            b"connect-src 'self'; "
+                            + (
+                                b"img-src 'self'; "
+                                if scope["path"] == "/"
+                                else b"img-src 'none'; "
+                            )
+                            + b"font-src 'none'; "
                             b"base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
                         ),
                     ]
@@ -292,9 +299,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Uvicorn is run with proxy_headers=False; never trust arbitrary X-Forwarded-For.
         return request.client.host if request.client else "unknown"
 
-    @application.get("/")
+    @application.get("/app")
     async def index() -> FileResponse:
         return FileResponse(STATIC / "index.html", media_type="text/html")
+
+    @application.get("/")
+    async def website() -> FileResponse:
+        return FileResponse(STATIC / "site.html", media_type="text/html")
+
+    @application.get("/api/downloads")
+    async def installer_downloads() -> dict:
+        return await asyncio.to_thread(downloads, STATIC)
 
     @application.get("/api/health")
     async def health() -> dict:

@@ -1,5 +1,10 @@
 # MarkItDown 邀请制工作台 v1.0.0
 
+dev 当前包含桌面产品重设计：`/` 为介绍与下载官网，`/app` 为服务工作区。
+macOS / Windows 客户端见 [markitdown-desktop](../markitdown-desktop/README.md)。
+这是后续预发布开发，不改既有 v1.0.0 标签或宣称新版已生产部署。
+设计、真实下载与独立验收见 [桌面产品说明](../../docs/DESKTOP-PRODUCT.zh-CN.md)。
+
 可共享的文档转 Markdown 工具：一次性邀请注册、登录、批量转换、任务历史、
 取消与重试、预览/源码/对照、复制、MD/ZIP 下载与事实清单。管理员管理
 账号、邀请、业务默认值和审计；管理员身份不允许读取他人的文档。

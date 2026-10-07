@@ -358,8 +358,8 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     assert(/id="engine-docling"[^>]*aria-describedby="engine-description-docling engine-limit-docling"/.test(html));
     assert(/href="#output-heading"/.test(html)); assert(/id="output-heading" tabindex="-1"/.test(html));
     const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
-    assert(css.includes("@media (max-width: 520px)")); assert(css.includes("min-height: 44px"));
-    assert(css.includes("@media (prefers-reduced-motion: reduce)")); assert(css.includes("@media (forced-colors: active)"));
+    assert(/@media\s*\(max-width:\s*520px\)/.test(css)); assert(/min-height:\s*44px/.test(css));
+    assert(/@media\s*\(prefers-reduced-motion:\s*reduce\)/.test(css)); assert(/@media\s*\(forced-colors:\s*active\)/.test(css));
     assert(css.includes(".output-content.is-split")); assert(!css.includes("@import"));
   });
   await test("six-character authentication boundary is shared by native fields and Unicode-aware JavaScript", async () => {
@@ -494,6 +494,15 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
   await test("local development boundary is visible before login and production is conditional", async () => {
     const local = createApp({ config: { ...baseConfig, deployment_mode: "local" } }); await flush(); assert(local.ui("deployment-notice").textContent.includes("没有完整生产文件系统隔离")); local.stop();
     const production = createApp({ config: { ...baseConfig, deployment_mode: "production" } }); await flush(); assert(production.ui("deployment-notice").textContent.includes("验收")); assert(production.ui("deployment-notice").textContent.includes("拒绝解析")); production.stop();
+  });
+
+  await test("workspace navigation preserves result and history while admin stays a separate view", async () => {
+    const app = createApp({ me: identity({ is_admin: true }), jobs: [job("nav")], routes: { "GET /api/jobs/nav": () => response(detail(job("nav"), "# Navigation result")), "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }) } }); await flush(); app.history("select"); await flush();
+    app.ui("nav-history").click(); assert(app.ui("upload-section").hidden); assert(app.ui("submit-section").hidden); assert.equal(app.ui("nav-history").getAttribute("aria-pressed"), "true"); assert.equal(app.ui("markdown-source").value, "# Navigation result");
+    app.ui("admin-toggle").click(); await flush(); assert(!app.ui("admin-panel").hidden); assert(app.ui("workspace").hidden);
+    app.ui("new-invite-token").value = "synthetic-token"; app.ui("invite-result").hidden = false;
+    app.ui("nav-workspace").click(); assert(app.ui("admin-panel").hidden); assert(!app.ui("workspace").hidden); assert(!app.ui("upload-section").hidden); assert.equal(app.ui("new-invite-token").value, ""); assert.equal(app.ui("markdown-source").value, "# Navigation result");
+    app.ui("logout-button").click(); await flush(); assert(app.ui("nav-workspace").disabled); assert(app.ui("nav-history").disabled); assert(app.ui("admin-panel").hidden); assert.equal(app.ui("markdown-source").value, ""); app.stop();
   });
 
   assert(!script.includes("localStorage") && !script.includes("sessionStorage"));

@@ -31,6 +31,7 @@
       "output": "dist"
     },
     "artifactName": "MarkItDown-${version}-${os}-${arch}-unsigned.${ext}",
+    "icon": "src/icon.png",
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

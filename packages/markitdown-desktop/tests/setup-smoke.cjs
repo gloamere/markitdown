@@ -5,7 +5,8 @@ const { _electron } = require("playwright"), assert = require("node:assert/stric
   const data = await fs.mkdtemp(path.join(os.tmpdir(), "markitdown-desktop-"));
   const output = process.env.MARKITDOWN_TEST_EVIDENCE;
   let requests = 0;
-  const server = http.createServer((request, response) => { requests += 1; if (request.url === "/api/config") { response.setHeader("Content-Type", "application/json"); setTimeout(() => response.end(JSON.stringify({ extensions: [".md"], has_admin: true })), 600); } else response.end("<!doctype html><title>Synthetic service</title><h1>Connected</h1>"); });
+  let compatible = false;
+  const server = http.createServer((request, response) => { requests += 1; if (request.url === "/api/config") { response.setHeader("Content-Type", "application/json"); setTimeout(() => response.end(JSON.stringify({ extensions: [".md"], has_admin: true })), 600); } else { response.setHeader("Content-Type", "text/html"); response.statusCode = compatible ? 200 : 404; response.end("<!doctype html><title>Synthetic service</title><h1>Connected</h1>"); } });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let app;
   try {
@@ -16,6 +17,10 @@ const { _electron } = require("playwright"), assert = require("node:assert/stric
     await setup.waitForFunction(() => document.getElementById("status").textContent.includes("HTTPS"));
     assert.equal(requests, 0);
     await setup.locator("#service-origin").fill(`http://127.0.0.1:${server.address().port}`);
+    await setup.locator("#connect-button").click();
+    await setup.waitForFunction(() => document.getElementById("status").textContent.includes("升级服务"));
+    assert.equal(app.windows().length, 1);
+    compatible = true;
     await setup.locator("#connect-button").click();
     await setup.locator("#cancel-button").click();
     await setup.waitForFunction(() => document.getElementById("status").textContent === "已取消连接。");
@@ -30,7 +35,7 @@ const { _electron } = require("playwright"), assert = require("node:assert/stric
     const desk = await deskPromise;
     await desk.waitForSelector("h1");
     assert.equal(await desk.locator("h1").textContent(), "Connected");
-    assert.equal(requests, 2); // one config and one workspace, double click creates no duplicate
+    assert.equal(requests, 3); // one config, workspace probe and workspace, no duplicate connect
     assert.equal(await desk.evaluate(() => typeof window.desktop), "undefined");
     assert.equal(await desk.evaluate(() => typeof window.require), "undefined");
     const prefs = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.webContents.getLastWebPreferences()));

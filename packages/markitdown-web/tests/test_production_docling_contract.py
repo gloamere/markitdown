@@ -361,7 +361,11 @@ def test_unavailable_runtime_has_content_free_failed_report(tmp_path, capsys):
         "FileNotFoundError",
         "SandboxUnavailable",
     }
-    assert "error_code" not in report["failure"]
+    if report["failure"]["exception_type"] == "SandboxUnavailable":
+        # Non-Linux hosts reject the OS boundary before checking runtime paths.
+        assert report["failure"]["error_code"] == "sandbox_unavailable"
+    else:
+        assert "error_code" not in report["failure"]
     assert report["passed"] == 0 and report["total"] == len(smoke.CHECKS)
     captured = capsys.readouterr()
     assert captured.err == ""

@@ -112,7 +112,10 @@ def main() -> None:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     rows = []
-    with tempfile.TemporaryDirectory(prefix="markitdown-evaluation-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="markitdown-evaluation-") as temporary_name:
+        # macOS /var is a symlink; resolve only our own fixture directory while
+        # retaining the converter's refusal of symlinked inputs and parents.
+        temporary = Path(temporary_name).resolve()
         settings = Settings(data_dir=Path(temporary), deployment_mode="local")
         for index, (filename, data, expected) in enumerate(fixtures(), 1):
             source = Path(temporary) / f"source-{index}{Path(filename).suffix}"

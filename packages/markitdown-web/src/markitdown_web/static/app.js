@@ -3,6 +3,7 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
+    "nav-workspace", "nav-history", "service-state", "page-title", "view-eyebrow", "view-description", "workspace", "workspace-overview", "workspace-heading", "input-heading-label", "upload-section", "submit-section",
     "auth-section", "session-section", "bootstrap-notice", "login-tab", "register-tab", "login-form", "register-form",
     "login-username", "login-password", "register-username", "register-password", "invite-token", "login-button", "register-button", "auth-message",
     "logout-button", "logout-retry", "account-name", "account-role", "quota-summary", "quota-reset", "connection-notice", "connection-message", "reconnect-button", "notice",
@@ -20,6 +21,7 @@
   let session = null, usage = null, epoch = 0, authBusy = false, authMode = "login", logoutToken = null, logoutUserId = null, logoutBusy = false;
   let pending = [], nextFileId = 1, jobs = [], selectedId = null, selectedDocument = null, view = "preview", renderedDocument = null;
   let uploadBusy = false, uploadUncertain = false, archiveBusy = false, jobsBusy = false, jobsSequence = 0, detailSequence = 0, detailLoading = false, detailError = "", detailController = null;
+  let navigation = "workspace";
   let selectedEngine = "markitdown", historyFilter = "all", uploadKey = null, uploadPayload = null;
   let adminSettings = null, settingsBusy = false, settingsDirty = false, auditBusy = false, auditSequence = 0;
   let pollTimer = null, expiryTimer = null, dragDepth = 0, adminSequence = 0, adminBusy = false, inviteBusy = false, sessionRefreshBusy = false;
@@ -112,6 +114,7 @@
   }
 
   function resetSession() {
+    navigation = "workspace";
     epoch += 1; connectionSequence += 1; connecting = false; ui["reconnect-button"].disabled = false; jobsSequence += 1; detailSequence += 1; adminSequence += 1;
     for (const controller of controllers) controller.abort(); controllers.clear();
     detailController?.abort(); detailController = null;
@@ -139,7 +142,35 @@
     authMessage(text, true); render();
   }
 
+  function renderNavigation() {
+    const admin = !!session?.user.is_admin && navigation === "admin";
+    const history = navigation === "history";
+    document.body.classList.toggle("is-authenticated", !!session);
+    document.body.classList.toggle("history-mode", history);
+    ui["nav-workspace"].disabled = ui["nav-history"].disabled = !session;
+    ui["nav-workspace"].setAttribute("aria-pressed", String(navigation === "workspace"));
+    ui["nav-history"].setAttribute("aria-pressed", String(history));
+    ui["admin-toggle"].setAttribute("aria-expanded", String(admin));
+    ui["admin-panel"].hidden = !admin;
+    ui["workspace"].hidden = ui["workspace-overview"].hidden = admin;
+    ui["upload-section"].hidden = ui["submit-section"].hidden = history;
+    ui["input-heading-label"].textContent = history ? "转换记录" : "添加文件";
+    ui["workspace-heading"].textContent = history ? "记录与结果" : "转换与结果";
+    ui["page-title"].textContent = !session ? "欢迎来到你的工作台" : admin ? "管理后台" : history ? "任务与历史" : "文档转换";
+    ui["view-eyebrow"].textContent = admin ? "WORKSPACE / ADMINISTRATION" : history ? "WORKSPACE / HISTORY" : "MARKITDOWN / WORKSPACE";
+    ui["view-description"].textContent = admin ? "管理成员、邀请、业务设置与审计记录。" : history ? "跟踪任务状态，找回结果并及时导出。" : "将文件转换为 Markdown，继续你的阅读、编辑与创作。";
+    ui["service-state"].textContent = !ready ? "服务连接待确认" : "已连接服务";
+  }
+
+  function navigate(next) {
+    if (!session || next === "admin" && !session.user.is_admin) return;
+    if (navigation === "admin" && next !== "admin") clearInvite();
+    navigation = next;
+    renderNavigation();
+  }
+
   function renderAuth() {
+    renderNavigation();
     ui["deployment-notice"].textContent = config.deployment_mode === "production" ? "生产隔离配置：能力验证失败的引擎会拒绝解析；是否已完成主机验收请向运营者确认" : "本地开发评估模式：没有完整生产文件系统隔离，请仅使用可信或合成测试文件";
     ui["auth-section"].hidden = !!session; ui["session-section"].hidden = !session;
     ui["bootstrap-notice"].hidden = !ready || config.has_admin;
@@ -797,7 +828,9 @@
   ui["drop-zone"].addEventListener("dragleave", (event) => { event.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) ui["drop-zone"].classList.remove("drag-over"); });
   ui["drop-zone"].addEventListener("drop", (event) => { event.preventDefault(); dragDepth = 0; ui["drop-zone"].classList.remove("drag-over"); addFiles(Array.from(event.dataTransfer?.files || [])); });
   document.addEventListener("dragover", (event) => event.preventDefault()); document.addEventListener("drop", (event) => event.preventDefault());
-  ui["admin-toggle"].addEventListener("click", () => { if (!session?.user.is_admin) return; ui["admin-panel"].hidden = !ui["admin-panel"].hidden; ui["admin-toggle"].setAttribute("aria-expanded", String(!ui["admin-panel"].hidden)); if (!ui["admin-panel"].hidden) void refreshAdmin(); else clearInvite(); });
+  ui["nav-workspace"].addEventListener("click", () => navigate("workspace"));
+  ui["nav-history"].addEventListener("click", () => navigate("history"));
+  ui["admin-toggle"].addEventListener("click", () => { if (!session?.user.is_admin) return; navigate(navigation === "admin" ? "workspace" : "admin"); if (navigation === "admin") void refreshAdmin(); });
   ui["settings-form"].addEventListener("submit", (event) => { event.preventDefault(); void saveSettings(); });
   for (const id of ["setting-daily-quota", "setting-file-mib", "setting-retention-hours"]) ui[id].addEventListener("input", () => { settingsDirty = true; });
   ui["audit-refresh"].addEventListener("click", refreshAudit);

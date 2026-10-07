@@ -30,6 +30,8 @@ jobs:
           .venv/bin/python -m playwright install --with-deps chromium
       - name: Run fresh-profile synthetic browser flows with Chromium sandbox enabled
         run: .venv/bin/python packages/markitdown-web/tests/browser_e2e.py --out "${{ runner.temp }}/markitdown-browser-evidence"
+      - name: Verify product site at desktop and narrow widths on an isolated service
+        run: .venv/bin/python scripts/verify-product-site.py --out "${{ runner.temp }}/markitdown-site-evidence"
 
   production-sandbox:
     # Same mandatory namespaces/profile; no Ubuntu 24.04 policy overrides.

@@ -18,6 +18,8 @@ npm run build:win
 ```
 
 锁定 Electron 44.6.0 / electron-builder 26.15.3，最低 macOS 12。
+构建工具的 `global-agent` 固定 4.1.3，去除旧代理日志依赖的 DoS 通告；
+安装后 npm audit 报告 0。该依赖仅在构建环境使用，不打入客户端业务代码。
 Windows x64 目标为 NSIS 安装器；支持范围须经真实 Windows 验收。
 本机 arm64 包不代表 Intel Mac / Windows 已测。打包不会自动发布。
 生成包在 `dist/`，文件名带 `unsigned`；没有 Apple Developer 签名、公证、
@@ -56,3 +58,18 @@ Actions 成功且工件实际存在才可引用。工件需要 GitHub 登录并�
 当前不自动创建 Release、不修改标签、不部署线上。
 
 安全设计依据：[Electron 官方安全建议](https://www.electronjs.org/docs/latest/tutorial/security)。
+
+## 独立验收
+
+```sh
+# 在具备正常窗口与回环能力的环境，临时服务/用户/数据自动清理
+npm run test:smoke
+# 仓库根目录，需安装 web 的开发依赖
+ORT_DISABLE_TELEMETRY=1 .venv/bin/python scripts/verify-desktop-service.py --out /tmp/native-evidence
+```
+
+第一项验证合成 HTTP 服务的协议拒绝、取消、重复连接、Origin/权限和返回。
+第二项在真实 API/转换工作进程上验证合成成员、真实 Markdown、额度、历史、
+原生 DownloadItem 字节保存与取消、迟到结果与退出清空。原生保存路径在
+测试中被确定化；这验证下载机制，不代表人工操作保存对话框的验收。
+真实个人资料和原有服务不作为测试输入，窗口以后台显示，不使用 Chrome。

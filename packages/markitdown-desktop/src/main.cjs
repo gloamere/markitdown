@@ -49,7 +49,7 @@ async function showSetup(message = "") {
   await disconnect();
   startupMessage = message;
   if (!setup || setup.isDestroyed()) {
-    setup = new BrowserWindow({ width: 1060, height: 760, minWidth: 760, minHeight: 640, backgroundColor: "#f6f7fb", title: "MarkItDown · 连接工作台", show: false,
+    setup = new BrowserWindow({ width: 1060, height: 820, minWidth: 760, minHeight: 700, backgroundColor: "#f6f7fb", title: "MarkItDown · 连接工作台", show: false,
       webPreferences: { ...preferences, preload: path.join(__dirname, "preload.cjs"), partition: "markitdown-setup" } });
     setup.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     setup.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -84,6 +84,8 @@ async function connect(value) {
     if (!response.ok || response.redirected) throw new Error("服务未返回可用配置，请核对地址和服务状态。");
     const config = await response.json();
     if (!Array.isArray(config.extensions) || typeof config.has_admin !== "boolean") throw new Error("该地址不是兼容的 MarkItDown 服务。");
+    const workspace = await isolated.fetch(`${origin}/app`, { redirect: "error", signal: AbortSignal.any([connectionAbort.signal, AbortSignal.timeout(12000)]) });
+    if (!workspace.ok || workspace.redirected || !workspace.headers.get("content-type")?.includes("text/html")) throw new Error("此服务缺少兼容的 /app 工作区，请联系管理员升级服务后重试。");
     if (attempt !== generation) throw new Error("连接已取消。");
     candidate = new BrowserWindow({ width: 1440, height: 960, minWidth: 960, minHeight: 700, backgroundColor: "#f6f7fb", title: "MarkItDown · 文档工作台", show: false,
       webPreferences: { ...preferences, session: isolated } });
@@ -108,7 +110,8 @@ async function connect(value) {
   } catch (error) {
     if (candidate && !candidate.isDestroyed()) candidate.destroy();
     await disconnect();
-    return { ok: false, message: error.message?.includes("ERR_CERT") ? "TLS 证书验证失败。请联系服务管理员修复证书。" : error.message || "连接失败，请检查服务后重试。" };
+    const message = error.message?.includes("ERR_CERT") ? "TLS 证书验证失败。请联系服务管理员修复证书。" : /ERR_|fetch failed|aborted|timeout/i.test(error.message || "") ? "服务暂时不可达，或连接已中断。请确认地址、网络与服务运行状态后重试。" : error.message || "连接失败，请检查服务后重试。";
+    return { ok: false, message };
   } finally { connecting = false; }
 }
 
