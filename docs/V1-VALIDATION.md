@@ -36,13 +36,14 @@ claim. Browser assertions and captured-but-unreviewed pixels are not visual sign
 
 ## Fixed remaining code-release closure
 
-1. Three live production lifecycle cases on the same unchanged profile: running
-   cancellation, timeout, and service-parent death; verify tree death/reap, no
-   premature slot reuse, no late publication and private scratch cleanup where
-   applicable. Existing local/mocked checks are useful but not this evidence
-2. One bounded production Docling integration: the existing five pinned public
-   model files, fresh probe, two-page preflight/conversion/independent preview,
-   and three-page rejection. The earlier 30-case local run is not production proof
+1. **Passed on 2b99a5e:** three live production lifecycle cases on the same
+   unchanged profile: cancellation, timeout, service-parent death, tree death/reap,
+   slot retention and no late publication; scratch cleanup is checked for the
+   supervised cancellation/timeout cases. Final-version CI must rerun them
+2. **Partially passed on 2b99a5e:** five pinned public model files, fresh probe,
+   two-page preflight/conversion/independent preview. Three-page rejection failed
+   and final cleanup verification was not reached. The earlier 30-case local run
+   is not production proof
 3. Complete applicable actual visual review and the paused Mac invitation-fix,
    administrator-settings and narrow-screen checks
 4. Final version-bearing source/wheel parity, aggregate regression and exact-SHA
@@ -94,3 +95,32 @@ aggregate before publication: 606 Web tests / 4 explicit live-production skips,
 regressions / 1 URL exclusion, 59 DOM scenarios and lint/format/type/syntax checks.
 These ordinary passes do not satisfy the four skipped live production cases;
 those and the Docling smoke are mandatory in the configured production CI job.
+
+## Fixed follow-on CI result (2b99a5e)
+
+[Run 37580441179](https://github.com/gloamere/markitdown/actions/runs/37580441179)
+completed with 23/24 jobs passing; pre-commit also passed. The production suite
+passed all 48 tests, including the three actual cancellation/timeout/parent-death
+cases, and all seven standard formats. The Docling smoke verified all five model
+files and passed its first five stages: runtime identity, manifest, live probe,
+two-page preflight, actual conversion and independent preview. It then failed the
+three-page-rejection assertion; cleanup verification was not reached. The harness
+wrapped an unexpected refusal or acceptance as ValueError, losing the distinction.
+The next narrow diagnostic correction preserves a fixed rejection code or a
+separate acceptance assertion. Independent portable reproduction also confirmed
+a sampler exit race: a process could disappear between status and children reads.
+The narrow correction rechecks only a missing children file and accepts only
+confirmed death/disappearance; missing roots still require supervisor exit
+confirmation. Live, unknown, denied or malformed observations remain failures.
+This is a demonstrated correctness fix, not proof of the prior CI failure cause.
+Admission limits and monitoring protections are unchanged.
+All 12 real-browser scenarios passed again. The lifecycle gate is demonstrated;
+Docling rejection/cleanup and final exact-version checks remain open.
+
+The exit-race/diagnostic correction passed the complete local aggregate: 647 Web
+checks / 4 explicit live-production skips, 7/7 formats, 9 harness self-checks,
+8 installer checks, 202 offline regressions / 1 URL exclusion, 59 DOM scenarios
+and lint/format/type/syntax. Independent read-only review found no concrete flaw
+and passed 22 targeted portable exit/fail-closed regressions. Live CI must still
+confirm the corrected exact commit; these results do not retrospectively identify
+the prior run's erased exception.

@@ -486,6 +486,31 @@ def process_tree_rss(pid: int, *, require_tree: bool = False) -> int:
         try:
             children = Path(f"/proc/{current}/task/{current}/children").read_text()
             pending.extend(int(child) for child in children.split())
+        except FileNotFoundError as exc:
+            # A process can exit after its live status sample but before this
+            # second procfs read. Confirm that exit; missing children on a live
+            # or unobservable process still cannot establish the required tree.
+            try:
+                latest = Path(f"/proc/{current}/status").read_text()
+            except FileNotFoundError:
+                if current == pid:
+                    # The caller must poll/reap the root before accepting exit.
+                    raise exc
+                continue
+            except OSError as status_error:
+                raise ResourceMonitoringUnavailable(
+                    "Process tree observation unavailable"
+                ) from status_error
+            latest_values = dict(
+                line.split(":", 1) for line in latest.splitlines() if ":" in line
+            )
+            latest_state = latest_values.get("State", "").strip().split()
+            if latest_state and latest_state[0] in {"Z", "X"}:
+                # Keep the previous RSS sample as a conservative overcount.
+                continue
+            raise ResourceMonitoringUnavailable(
+                "Process tree observation unavailable"
+            ) from exc
         except (OSError, ValueError) as exc:
             raise ResourceMonitoringUnavailable(
                 "Process tree observation unavailable"

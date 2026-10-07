@@ -558,3 +558,74 @@ def test_actual_live_child_reports_nonzero_rss():
     finally:
         process.terminate()
         process.wait(timeout=3)
+
+
+@pytest.mark.parametrize("current", [101, 102])
+@pytest.mark.parametrize(
+    "after", ["missing", "zombie", "dead", "live", "unknown", "denied"]
+)
+def test_production_rss_children_exit_race_requires_confirmed_death(
+    monkeypatch, current, after
+):
+    reads = {}
+
+    def read(path, *args, **kwargs):
+        key = str(path)
+        reads[key] = reads.get(key, 0) + 1
+        if key == f"/proc/{current}/task/{current}/children":
+            raise FileNotFoundError("Synthetic exit race")
+        if key == f"/proc/{current}/status" and reads[key] > 1:
+            if after == "missing":
+                raise FileNotFoundError("Synthetic confirmed exit")
+            if after == "denied":
+                raise PermissionError("Synthetic unknown state")
+            if after == "unknown":
+                return "Name:\tfixture\n"
+            state = {"zombie": "Z", "dead": "X", "live": "S"}[after]
+            return f"State:\t{state}\nVmRSS:\t10 kB\n"
+        if key.endswith("/status"):
+            return "State:\tS\nVmRSS:\t10 kB\n"
+        if key == "/proc/101/task/101/children":
+            return "102"
+        return ""
+
+    monkeypatch.setattr(Path, "read_text", read)
+    if after in {"live", "unknown", "denied"}:
+        with pytest.raises(sandbox.ResourceMonitoringUnavailable):
+            sandbox.process_tree_rss(101, require_tree=True)
+    elif current == 101 and after == "missing":
+        with pytest.raises(FileNotFoundError):
+            sandbox.process_tree_rss(101, require_tree=True)
+    else:
+        # Previously measured RSS is retained; no unavailable live memory is zeroed.
+        assert (
+            sandbox.process_tree_rss(101, require_tree=True)
+            == (10 if current == 101 else 20) * 1024
+        )
+    assert reads[f"/proc/{current}/status"] == 2
+
+
+def test_production_rss_children_permission_denial_is_not_an_exit_race(monkeypatch):
+    status_reads = []
+
+    def read(path, *args, **kwargs):
+        if str(path).endswith("/status"):
+            status_reads.append(str(path))
+            return "State:\tS\nVmRSS:\t10 kB\n"
+        raise PermissionError("Synthetic live tree denied")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(sandbox.ResourceMonitoringUnavailable):
+        sandbox.process_tree_rss(101, require_tree=True)
+    assert status_reads == ["/proc/101/status"]
+
+
+def test_production_rss_malformed_children_remains_failure(monkeypatch):
+    def read(path, *args, **kwargs):
+        if str(path).endswith("/status"):
+            return "State:\tS\nVmRSS:\t10 kB\n"
+        return "not-a-pid"
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(sandbox.ResourceMonitoringUnavailable):
+        sandbox.process_tree_rss(101, require_tree=True)

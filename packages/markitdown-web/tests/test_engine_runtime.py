@@ -650,3 +650,65 @@ def test_local_config_labels_rss_process_scope(settings, monkeypatch):
         engines.engine_config(settings)[1]["rss_measurement_scope"]
         == "direct-parser-process"
     )
+
+
+@pytest.mark.parametrize("exited", [False, True])
+def test_production_missing_root_is_accepted_only_after_supervisor_exit(
+    settings, monkeypatch, exited
+):
+    from markitdown_web import sandbox
+
+    settings.deployment_mode = "production"
+    monkeypatch.setattr(
+        engines, "_paths", lambda config: (Path(sys.executable), config.docling_models)
+    )
+    monkeypatch.setattr(
+        sandbox, "command", lambda *args, **kwargs: (["synthetic-never-executed"], {})
+    )
+    polls = []
+    process = SimpleNamespace(pid=987654321, returncode=None)
+
+    def poll():
+        polls.append(True)
+        if len(polls) > 1 and exited:
+            process.returncode = 0
+        return process.returncode
+
+    process.poll = poll
+
+    def launch(*args, **kwargs):
+        (settings.data_dir / "engine-result.json").write_text(
+            json.dumps({"error": "page_limit"})
+        )
+        return process
+
+    monkeypatch.setattr(engines.subprocess, "Popen", launch)
+    reaped, results = [], []
+    monkeypatch.setattr(engines, "_terminate", lambda child: reaped.append(child))
+    read_result = engines._read_result
+
+    def record_result(path):
+        results.append(path)
+        return read_result(path)
+
+    monkeypatch.setattr(engines, "_read_result", record_result)
+
+    def missing(pid, *, require_tree=False):
+        assert require_tree is True
+        raise FileNotFoundError("Synthetic confirmed-missing root")
+
+    monkeypatch.setattr(sandbox, "process_tree_rss", missing)
+    with pytest.raises(ConversionError) as error:
+        engines._invoke(
+            settings,
+            "preflight",
+            settings.data_dir / "source.pdf",
+            settings.data_dir,
+            lambda: False,
+        )
+    assert (
+        str(error.value)
+        == engines.ERRORS["page_limit" if exited else "conversion_failed"]
+    )
+    assert len(polls) == 2 and len(results) == int(exited)
+    assert reaped == [process]

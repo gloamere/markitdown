@@ -381,7 +381,10 @@ def test_invalid_image_identity_is_not_echoed(tmp_path, image):
 
 
 @pytest.mark.parametrize(
-    "code,message", list(engines.ERRORS.items()) + list(SAFE_ERRORS.items())
+    "code,message",
+    list(engines.ERRORS.items())
+    + list(SAFE_ERRORS.items())
+    + list(smoke.SUPERVISOR_ERRORS.items()),
 )
 def test_only_known_error_messages_become_canonical_codes(code, message):
     assert smoke.failure_metadata(ConversionError(message)) == {
@@ -395,3 +398,54 @@ def test_unknown_failure_messages_never_enter_diagnostics(error):
     secret = "/private/source.pdf: private document contents"
     assert smoke.failure_metadata(error(secret)) == {"exception_type": error.__name__}
     assert secret not in json.dumps(smoke.failure_metadata(error(secret)))
+
+
+def test_three_page_harness_accepts_only_expected_rejection(monkeypatch):
+    # Harness-only branch tests replace the API at its boundary. The live CI
+    # script itself never patches admission, parser, security or monitoring.
+    settings = object()
+    payload = smoke.synthetic_pdf(3)
+    calls = []
+
+    def reject(engine, uploads, actual_settings):
+        calls.append((engine, uploads, actual_settings))
+        raise ConversionError(engines.ERRORS["page_limit"])
+
+    monkeypatch.setattr(engines, "validate_engine_uploads", reject)
+    assert smoke.require_three_page_rejection(settings, payload) is None
+    assert calls == [("docling", [{"suffix": ".pdf", "data": payload}], settings)]
+
+
+@pytest.mark.parametrize(
+    "code,message",
+    [
+        (code, message)
+        for code, message in engines.ERRORS.items()
+        if code != "page_limit"
+    ]
+    + list(smoke.SUPERVISOR_ERRORS.items()),
+)
+def test_three_page_harness_preserves_unexpected_refusal(monkeypatch, code, message):
+    refusal = ConversionError(message)
+
+    def reject(*args):
+        raise refusal
+
+    monkeypatch.setattr(engines, "validate_engine_uploads", reject)
+    with pytest.raises(ConversionError) as caught:
+        smoke.require_three_page_rejection(object(), smoke.synthetic_pdf(3))
+    assert caught.value is refusal
+    assert smoke.failure_metadata(caught.value) == {
+        "exception_type": "ConversionError",
+        "error_code": code,
+    }
+
+
+def test_three_page_harness_distinguishes_false_acceptance(monkeypatch):
+    monkeypatch.setattr(engines, "validate_engine_uploads", lambda *args: None)
+    with pytest.raises(smoke.ThreePageAccepted) as caught:
+        smoke.require_three_page_rejection(object(), smoke.synthetic_pdf(3))
+    assert isinstance(caught.value, AssertionError)
+    assert smoke.failure_metadata(caught.value) == {
+        "exception_type": "ThreePageAccepted"
+    }

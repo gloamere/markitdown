@@ -30,6 +30,22 @@ CHECKS = (
     "three_page_rejected",
     "private_workspaces_cleaned",
 )
+# Existing supervisor refusals are fixed strings in engines.py. Map only exact
+# matches; never include an unrecognized exception message in the report.
+SUPERVISOR_ERRORS = {
+    "resource_monitoring_unavailable": "运行资源监测不可用，任务已停止；请联系管理员",
+    "resource_limit": "PDF 增强超出资源限制，请拆分文档后重试",
+    "insufficient_temporary_storage": "临时存储空间不足，请稍后重试",
+    "sandbox_unavailable": sandbox.UNAVAILABLE,
+    "preflight_busy": "PDF 页数校验繁忙，请稍后重试",
+    "deadline_exceeded": "PDF 增强超时，请拆分文档后重试",
+    "preflight_timeout": f"PDF 增强超时（{engines.PREFLIGHT_SECONDS} 秒），请拆分文档后重试",
+    "conversion_timeout": f"PDF 增强超时（{engines.WALL_SECONDS} 秒），请拆分文档后重试",
+}
+
+
+class ThreePageAccepted(AssertionError):
+    """The real admission API returned successfully for the three-page input."""
 
 
 def synthetic_pdf(pages: int) -> bytes:
@@ -144,13 +160,26 @@ def failure_metadata(exc: Exception) -> dict:
     result = {"exception_type": type(exc).__name__}
     known = {
         message: code
-        for messages in (engines.ERRORS, SAFE_ERRORS)
+        for messages in (engines.ERRORS, SAFE_ERRORS, SUPERVISOR_ERRORS)
         for code, message in messages.items()
     }
     code = known.get(str(exc))
     if code is not None:
         result["error_code"] = code
     return result
+
+
+def require_three_page_rejection(settings: Settings, payload: bytes) -> None:
+    """Accept only the canonical page-limit refusal; preserve other failures."""
+    try:
+        engines.validate_engine_uploads(
+            "docling", [{"suffix": ".pdf", "data": payload}], settings
+        )
+    except ConversionError as exc:
+        if str(exc) != engines.ERRORS["page_limit"]:
+            raise
+    else:
+        raise ThreePageAccepted
 
 
 def run_smoke(runtime: Path, models: Path, image_id: str) -> dict:
@@ -233,15 +262,7 @@ def run_smoke(runtime: Path, models: Path, image_id: str) -> dict:
 
             stage = CHECKS[5]
             three_pages = synthetic_pdf(3)
-            try:
-                engines.validate_engine_uploads(
-                    "docling", [{"suffix": ".pdf", "data": three_pages}], settings
-                )
-            except ConversionError as exc:
-                if str(exc) != engines.ERRORS["page_limit"]:
-                    raise ValueError("unexpected-rejection") from None
-            else:
-                raise ValueError("three-pages-were-accepted")
+            require_three_page_rejection(settings, three_pages)
             report["three_page"] = {
                 "source_sha256": hashlib.sha256(three_pages).hexdigest(),
                 "rejection_code": "page_limit",
