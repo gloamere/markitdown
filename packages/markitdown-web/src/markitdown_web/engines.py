@@ -235,7 +235,11 @@ def _invoke(
             if time.monotonic() > stop_at:
                 raise ConversionError(f"PDF 增强超时（{timeout} 秒），请拆分文档后重试")
             try:
-                rss = _rss(process.pid)
+                rss = (
+                    sandbox.process_tree_rss(process.pid, require_tree=True)
+                    if sandbox.production(settings)
+                    else _rss(process.pid)
+                )
             except FileNotFoundError:
                 if process.poll() is not None:
                     break
@@ -252,6 +256,8 @@ def _invoke(
         return _read_result(output)
     except ConversionError:
         raise
+    except sandbox.ResourceMonitoringUnavailable as exc:
+        raise ConversionError("运行资源监测不可用，任务已停止；请联系管理员") from exc
     except sandbox.SandboxUnavailable as exc:
         raise ConversionError(sandbox.UNAVAILABLE) from exc
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -432,6 +438,9 @@ def engine_config(settings: Any) -> list[dict[str, Any]]:
         },
         {
             "id": "docling",
+            "rss_measurement_scope": "complete-wrapper-tree-required"
+            if sandbox.production(settings)
+            else "direct-parser-process",
             **sandbox.execution_snapshot(settings, "docling"),
             "label": "PDF 增强",
             "available": not reason,

@@ -10,7 +10,7 @@
     "engine-group", "engine-markitdown", "engine-docling", "engine-card-markitdown", "engine-card-docling", "engine-badge-markitdown", "engine-badge-docling", "engine-limit-markitdown", "engine-limit-docling", "engine-selection-note",
     "history-list", "history-count", "history-empty", "history-note", "refresh-button", "archive-button", "archive-count", "filter-all", "filter-active", "filter-completed", "filter-failed",
     "preview-tab", "source-tab", "split-tab", "preview-panel", "source-panel", "markdown-preview", "markdown-source", "output-content", "output-empty", "empty-title", "empty-description", "document-heading", "document-name", "document-length", "document-engine", "document-expiry", "document-progress", "document-reload", "document-retry", "document-cancel", "preview-safety", "output-label", "copy-button", "download-button", "action-status",
-    "auth-retention", "account-retention", "result-review", "job-facts", "job-facts-list", "attempt-list", "manifest-download",
+    "deployment-notice", "auth-retention", "account-retention", "result-review", "job-facts", "job-facts-list", "attempt-list", "manifest-download",
     "invite-hours", "user-defaults", "settings-form", "settings-version", "setting-daily-quota", "setting-file-mib", "setting-retention-hours", "setting-quota-help", "setting-file-help", "setting-retention-help", "settings-save", "settings-status", "service-config", "audit-list", "audit-note", "audit-refresh",
     "admin-toggle", "admin-panel", "admin-refresh", "admin-status", "invite-create", "invite-result", "new-invite-token", "invite-expiry", "invite-copy", "invite-dismiss", "invites-list", "users-list",
   ].map((id) => [id, $(id)]));
@@ -140,6 +140,7 @@
   }
 
   function renderAuth() {
+    ui["deployment-notice"].textContent = config.deployment_mode === "production" ? "生产隔离配置：能力验证失败的引擎会拒绝解析；是否已完成主机验收请向运营者确认" : "本地开发评估模式：没有完整生产文件系统隔离，请仅使用可信或合成测试文件";
     ui["auth-section"].hidden = !!session; ui["session-section"].hidden = !session;
     ui["bootstrap-notice"].hidden = !ready || config.has_admin;
     const disabled = !ready || !config.has_admin || authBusy || logoutToken !== null;
@@ -599,6 +600,13 @@
     const labels = { max_file_bytes: "全局单文件上限", max_total_bytes: "每批总大小", max_files: "每批文件数", global_concurrency: "全局并发", per_user_concurrency: "每人并发", docling_concurrency: "Docling 并发", max_pending_jobs: "排队与运行总量", max_queue_jobs: "排队与运行总量", storage_budget_bytes: "逻辑存储预约预算", max_storage_bytes: "逻辑存储预约预算", max_markdown_bytes: "Markdown 输出上限", max_html_bytes: "HTML 输出上限", conversion_timeout: "普通转换超时", history_seconds: "到期后历史保留秒数", max_attempts: "每任务最多尝试", deployment_mode: "部署模式", application_version: "应用版本", secure_cookie: "安全 Cookie", cookie_secure: "安全 Cookie", session_seconds: "会话有效秒数", invite_seconds: "部署默认邀请秒数", cleanup_interval: "运行时清理间隔秒数", docling_enabled: "Docling 配置开关", password_min_length: "密码最少字符数" };
     addFact(list, "作用范围 / 修改方式", "整个服务；以下仅展示，变更需受控部署并重新验证");
     addFact(list, "应用版本", config.application_version || "未记录");
+    addFact(list, "部署模式", config.deployment_mode === "production" ? "生产配置（主机验收另行确认）" : "本地开发评估，非完整生产隔离");
+    const maintenance = data?.maintenance;
+    if (maintenance) {
+      addFact(list, "最近成功清理", maintenance.last_succeeded_at ? utc(maintenance.last_succeeded_at) : "尚无记录");
+      addFact(list, "清理连续失败 / 任务维护失败", `${maintenance.consecutive_failures || 0} / ${maintenance.worker_failures || 0}`);
+      if (maintenance.last_counts) addFact(list, "最近清理计数", JSON.stringify(maintenance.last_counts));
+    }
     addFact(list, "新任务有效期", `${duration(data?.effective?.retention_seconds ?? config.retention_seconds)}，从入队起计算`);
     for (const [key, value] of Object.entries(deployment)) {
       if (value === undefined || value === null) continue;

@@ -465,3 +465,63 @@ def test_real_standard_pdf_has_no_two_page_admission_cap(tmp_path):
     assert metadata["version"] and metadata["python"]
     assert "page_count" not in metadata
     assert not list(tmp_path.glob("parser-*")) and not list(tmp_path.glob("preview-*"))
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError, PermissionError])
+def test_local_rss_keeps_live_root_when_children_unavailable(monkeypatch, failure):
+    def read(path, *args, **kwargs):
+        if str(path).endswith("/status"):
+            return "State:\tS (sleeping)\nVmRSS:\t1234 kB\n"
+        raise failure("Synthetic unavailable children")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert sandbox.process_tree_rss(101) == 1234 * 1024
+    with pytest.raises(sandbox.ResourceMonitoringUnavailable):
+        sandbox.process_tree_rss(101, require_tree=True)
+
+
+def test_production_rss_sums_observed_wrapper_tree(monkeypatch):
+    content = {
+        "/proc/101/status": "State:\tS (sleeping)\nVmRSS:\t12 kB\n",
+        "/proc/101/task/101/children": "102 103",
+        "/proc/102/status": "State:\tR (running)\nVmRSS:\t100 kB\n",
+        "/proc/102/task/102/children": "",
+        "/proc/103/status": "State:\tS (sleeping)\nVmRSS:\t200 kB\n",
+        "/proc/103/task/103/children": "",
+    }
+    monkeypatch.setattr(Path, "read_text", lambda path: content[str(path)])
+    assert sandbox.process_tree_rss(101, require_tree=True) == 312 * 1024
+    assert sandbox.process_tree_rss(101) == 12 * 1024
+
+
+def test_unreadable_live_rss_is_not_zero(monkeypatch):
+    monkeypatch.setattr(Path, "read_text", lambda path: "State:\tR (running)\n")
+    with pytest.raises(sandbox.ResourceMonitoringUnavailable):
+        sandbox.process_tree_rss(101)
+
+
+def test_missing_root_requires_supervisor_exit_confirmation(monkeypatch):
+    def read(path):
+        raise FileNotFoundError("Synthetic missing root")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(FileNotFoundError):
+        sandbox.process_tree_rss(101)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process status")
+def test_actual_live_child_reports_nonzero_rss():
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time;data=bytearray(1024*1024);time.sleep(10)"]
+    )
+    try:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            rss = sandbox.process_tree_rss(process.pid)
+            if rss > 1024 * 1024:
+                break
+            time.sleep(0.02)
+        assert rss > 1024 * 1024
+    finally:
+        process.terminate()
+        process.wait(timeout=3)

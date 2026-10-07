@@ -48,6 +48,10 @@ class SandboxUnavailable(RuntimeError):
     """The mandatory deployment boundary could not be constructed."""
 
 
+class ResourceMonitoringUnavailable(SandboxUnavailable):
+    """A live task cannot be observed to the configured measurement scope."""
+
+
 def production(settings: Any) -> bool:
     mode = getattr(settings, "deployment_mode", "local")
     if mode not in {"local", "production"}:
@@ -431,8 +435,15 @@ def enforce_worker_filter() -> None:
         raise RuntimeError("Network filter not verified")
 
 
-def process_tree_rss(pid: int) -> int:
-    """Sample the complete trusted-wrapper tree, not merely the bwrap parent."""
+def process_tree_rss(pid: int, *, require_tree: bool = False) -> int:
+    """Sample RSS without silently replacing unavailable observations with zero.
+
+    Local Docling directly supervises a single parser process whose seccomp
+    filter denies process creation; this measures that process, including its
+    threads, but makes no descendant-tree claim. Production wraps the parser in
+    bubblewrap and must request require_tree=True. Missing tree visibility then
+    fails closed. We never substitute another route around a /proc restriction.
+    """
     total = 0
     pending = [pid]
     visited = set()
@@ -443,14 +454,38 @@ def process_tree_rss(pid: int) -> int:
         visited.add(current)
         try:
             status = Path(f"/proc/{current}/status").read_text()
-            children = Path(f"/proc/{current}/task/{current}/children").read_text()
         except FileNotFoundError:
+            if current == pid:
+                # The supervisor must poll/reap to distinguish an exited root
+                # from failed monitoring of a live one; never fabricate 0 RSS.
+                raise
+            continue  # A previously observed descendant may already have exited.
+        except OSError as exc:
+            raise ResourceMonitoringUnavailable(
+                "Process RSS observation unavailable"
+            ) from exc
+        values = dict(line.split(":", 1) for line in status.splitlines() if ":" in line)
+        state = values.get("State", "").strip().split()
+        if state and state[0] in {"Z", "X"}:
+            continue  # A confirmed dead process has no resident-memory sample.
+        try:
+            rss = int(values["VmRSS"].split()[0]) * 1024
+            if rss < 0:
+                raise ValueError("Negative RSS")
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ResourceMonitoringUnavailable(
+                "Process RSS observation unavailable"
+            ) from exc
+        total += rss  # Keep the root observation independent of children access.
+        if not require_tree:
             continue
-        for line in status.splitlines():
-            if line.startswith("VmRSS:"):
-                total += int(line.split()[1]) * 1024
-                break
-        pending.extend(map(int, children.split()))
+        try:
+            children = Path(f"/proc/{current}/task/{current}/children").read_text()
+            pending.extend(int(child) for child in children.split())
+        except (OSError, ValueError) as exc:
+            raise ResourceMonitoringUnavailable(
+                "Process tree observation unavailable"
+            ) from exc
     return total
 
 

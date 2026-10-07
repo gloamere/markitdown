@@ -482,6 +482,11 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.ui("manifest-download").click(); assert.equal(app.document.downloads[0].href, "/api/jobs/expired-manifest/manifest"); app.stop();
   });
 
+  await test("local development boundary is visible before login and production is conditional", async () => {
+    const local = createApp({ config: { ...baseConfig, deployment_mode: "local" } }); await flush(); assert(local.ui("deployment-notice").textContent.includes("没有完整生产文件系统隔离")); local.stop();
+    const production = createApp({ config: { ...baseConfig, deployment_mode: "production" } }); await flush(); assert(production.ui("deployment-notice").textContent.includes("验收")); assert(production.ui("deployment-notice").textContent.includes("拒绝解析")); production.stop();
+  });
+
   assert(!script.includes("localStorage") && !script.includes("sessionStorage"));
   assert.equal((script.match(/\.innerHTML\s*=/g) || []).length, 1, "Only sanitized server preview may become HTML");
   assert(!html.match(/(?:src|href)="https?:/));

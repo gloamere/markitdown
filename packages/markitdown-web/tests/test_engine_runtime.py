@@ -603,3 +603,50 @@ def test_teardown_signals_group_after_leader_exit(monkeypatch):
     process = SimpleNamespace(pid=12345, returncode=0, wait=lambda **kwargs: 0)
     engines._terminate(process)
     assert len([item for item in signals if item[1]]) == 2
+
+
+def test_production_missing_rss_tree_visibility_fails_closed_and_reaps(
+    settings, monkeypatch
+):
+    from markitdown_web import sandbox
+
+    settings.deployment_mode = "production"
+    monkeypatch.setattr(
+        engines, "_paths", lambda config: (Path(sys.executable), config.docling_models)
+    )
+    monkeypatch.setattr(
+        sandbox, "command", lambda *args, **kwargs: (["synthetic-never-executed"], {})
+    )
+    process = SimpleNamespace(pid=987654321, poll=lambda: None, returncode=None)
+    monkeypatch.setattr(engines.subprocess, "Popen", lambda *args, **kwargs: process)
+    reaped = []
+    monkeypatch.setattr(engines, "_terminate", lambda child: reaped.append(child))
+    monkeypatch.setattr(
+        engines,
+        "_rss",
+        lambda pid: pytest.fail("Production used local process-only measurement"),
+    )
+
+    def sample(pid, *, require_tree=False):
+        assert require_tree is True
+        raise sandbox.ResourceMonitoringUnavailable("Synthetic unavailable children")
+
+    monkeypatch.setattr(sandbox, "process_tree_rss", sample)
+    with pytest.raises(ConversionError, match="资源监测不可用") as error:
+        engines._invoke(
+            settings,
+            "convert",
+            settings.data_dir / "source.pdf",
+            settings.data_dir,
+            lambda: False,
+        )
+    assert "children" not in str(error.value)
+    assert reaped == [process]
+
+
+def test_local_config_labels_rss_process_scope(settings, monkeypatch):
+    monkeypatch.setattr(engines, "ensure_engine_available", lambda *args: None)
+    assert (
+        engines.engine_config(settings)[1]["rss_measurement_scope"]
+        == "direct-parser-process"
+    )

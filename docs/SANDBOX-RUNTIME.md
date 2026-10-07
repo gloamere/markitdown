@@ -78,7 +78,8 @@ cleanup; maintenance must exclude `sandbox.active_workspaces()`.
 
 - Standard: 45 s wall, 35 CPU s, 1.5 GiB address-space ceiling
 - Docling conversion: 60 s wall, 90 CPU s, 8 GiB address-space ceiling, two CPUs,
-  sampled complete-wrapper-tree RSS <= 3 GiB
+  sampled RSS <= 3 GiB; production requires complete-wrapper-tree visibility,
+  local mode measures only the directly supervised parser process
 - Docling preflight/probe: 8 s wall, 5 CPU s, 1 GiB address space, sampled RSS <= 512 MiB
 - Independent preview: 5 CPU s, 384 MiB address space, 8 s maximum stage wall
   (further reduced by the attempt's remaining shared deadline)
@@ -88,7 +89,13 @@ cleanup; maintenance must exclude `sandbox.active_workspaces()`.
 
 RLIMIT_AS is **not** a per-job physical-memory cgroup. RLIMIT_NPROC counts tasks for
 the operating-system UID, so use a dedicated service account and validate thread
-headroom at intended concurrency. RSS checks are sampled and can miss peaks.
+headroom at intended concurrency. RSS checks are sampled and can miss peaks. A live process with unavailable VmRSS
+is an error, never a fabricated zero. The cloud executor exposes status/VmRSS
+but not the per-process children file: local Docling reports direct-parser-process
+measurement, while production fails closed when required wrapper-tree visibility
+is unavailable. Process-only sampling includes all threads in the direct process
+and relies on Docling's seccomp denial of process creation; it is not a general
+descendant-tree measurement.
 Tmpfs caps do not replace host-wide capacity and admission planning. This revision
 does not create delegated per-job cgroups or claim a per-job hard physical-RAM
 limit. Intended-host hard resource/capacity and crash-recovery testing remains a
