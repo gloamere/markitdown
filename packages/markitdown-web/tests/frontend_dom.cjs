@@ -56,7 +56,7 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   closest(selector) { return this.matches(selector) ? this : this.parent?.closest(selector) || null; }
 }
-function createApp({ origin = "https://workspace.example.com:8443", config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, legacyCopy = false } = {}) {
+function createApp({ origin = "https://workspace.example.com:8443", config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, clipboardWrite = null, legacyCopy = false } = {}) {
   const document = { activeElement: null, listeners: {}, downloads: [], addEventListener(kind, fn) { this.listeners[kind] = fn; }, createElement(tag) { return new Element(tag, this); }, createDocumentFragment() { return this.createElement("fragment"); } };
   document.body = document.createElement("body"); document.execCommand = () => legacyCopy;
   const elements = {};
@@ -79,7 +79,7 @@ function createApp({ origin = "https://workspace.example.com:8443", config = bas
     if (key === "POST /api/auth/logout") { state.me = null; return response({ status: "ok" }); }
     throw new Error(`Unexpected fetch: ${key}`);
   };
-  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController, TextEncoder, crypto: require("node:crypto").webcrypto, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => { if (clipboardFailure) throw new Error("Permission denied"); copies.push(text); } } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
+  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController, TextEncoder, crypto: require("node:crypto").webcrypto, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => { if (clipboardWrite) return clipboardWrite(text); if (clipboardFailure) throw new Error("Permission denied"); copies.push(text); } } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
   const ui = (id) => elements[id];
   return { state, ui, document, window, timers, urls, revoked, requests, copies,
     async advance(ms) { const target = time + ms; let guard = 0; while (true) { const due = [...timers].filter(([, value]) => value.at <= target).sort((a, b) => a[1].at - b[1].at)[0]; if (!due) break; assert(++guard < 100, "Timer busy loop"); time = due[1].at; timers.delete(due[0]); due[1].fn(); await flush(); } time = target; },
@@ -153,6 +153,40 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.history("select"); assert.equal(app.ui("empty-description").textContent, failed.error); app.history("retry"); app.history("retry"); assert.equal(app.calls("/api/jobs/bad/retry").length, 1);
     app.state.jobs = [job("bad", "queued", { attempts: 2 })]; retry.resolve(response(app.state.jobs[0])); await flush(); assert.equal(app.ui("history-list").children[0].dataset.state, "queued");
     app.window.confirmResult = false; app.history("delete"); assert.equal(app.calls("/api/jobs/bad", "DELETE").length, 0); app.window.confirmResult = true; app.history("delete"); await flush(); assert.equal(app.ui("history-count").textContent, "0"); assert.equal(app.ui("markdown-source").value, ""); assert(app.window.confirmations[0].includes("无法恢复")); app.stop();
+  });
+  await test("late cancel and retry preserve newer completed or pending document selection", async () => {
+    for (const action of ["cancel", "retry"]) for (const pendingDetail of [false, true]) {
+      const mutation = deferred(), newer = deferred(); const a = job("a", action === "cancel" ? "running" : "failed"), b = job("b");
+      const app = createApp({ me: identity(), jobs: [a, b], routes: { [`POST /api/jobs/a/${action}`]: () => mutation.promise, "GET /api/jobs/b": () => pendingDetail ? newer.promise : response(detail(b, "# Newer selection")) } }); await flush();
+      app.history("select", 0); app.history(action); app.history("select", 1); await flush();
+      const changed = { ...a, status: action === "cancel" ? "failed" : "queued", attempts: action === "retry" ? 2 : 1 };
+      app.state.jobs = [changed, b]; mutation.resolve(response(changed)); await flush();
+      assert.equal(app.ui("document-name").textContent, "file-b.md");
+      if (pendingDetail) { assert(!app.ui("document-progress").hidden); newer.resolve(response(detail(b, "# Newer selection"))); await flush(); }
+      assert.equal(app.ui("markdown-source").value, "# Newer selection"); assert.equal(app.ui("history-list").children[0].dataset.state, changed.status); app.stop();
+    }
+  });
+  await test("late clipboard outcomes cannot affect a newer document", async () => {
+    for (const denied of [false, true]) {
+      const clipboard = deferred();
+      const app = createApp({ me: identity(), jobs: [job("a"), job("b")], clipboardWrite: () => clipboard.promise.then(() => { if (denied) throw new Error("Denied"); }), routes: { "GET /api/jobs/a": () => response(detail(job("a"), "# Original")), "GET /api/jobs/b": () => response(detail(job("b"), "# Newer")) } }); await flush();
+      app.history("select", 0); await flush(); app.ui("copy-button").click(); app.history("select", 1); await flush(); app.ui("preview-tab").focus();
+      const announcement = app.ui("action-status").textContent; clipboard.resolve(); await flush();
+      assert.equal(app.ui("markdown-source").value, "# Newer"); assert.equal(app.ui("preview-tab").getAttribute("aria-selected"), "true"); assert.equal(app.document.activeElement, app.ui("preview-tab")); assert.equal(app.ui("action-status").textContent, announcement); assert.equal(app.ui("copy-button").textContent, "复制"); assert(!app.ui("notice").textContent.includes("系统复制")); app.stop();
+    }
+  });
+  await test("clipboard fallback respects newer navigation and view choices", async () => {
+    for (const change of ["navigation", "view"]) {
+      const clipboard = deferred();
+      const app = createApp({ me: identity(), jobs: [job("a")], clipboardWrite: () => clipboard.promise.then(() => { throw new Error("Denied"); }), routes: { "GET /api/jobs/a": () => response(detail(job("a"))) } }); await flush(); app.history("select"); await flush(); app.ui("copy-button").click();
+      if (change === "navigation") { app.ui("nav-history").click(); app.ui("nav-workspace").click(); } else app.ui("split-tab").click();
+      clipboard.resolve(); await flush(); assert.equal(app.ui(change === "view" ? "split-tab" : "preview-tab").getAttribute("aria-selected"), "true"); assert(!app.ui("notice").textContent.includes("系统复制")); app.stop();
+    }
+  });
+  await test("late invite clipboard failure cannot reopen dismissed private content", async () => {
+    const clipboard = deferred();
+    const app = createApp({ me: identity({ is_admin: true }), clipboardWrite: () => clipboard.promise.then(() => { throw new Error("Denied"); }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "POST /api/admin/invites": () => response({ token: "synthetic-copy", expires_at: NOW / 1000 + 3600 }) } }); await flush(); app.ui("admin-toggle").click(); await flush(); app.ui("invite-create").click(); await flush(); app.ui("invite-copy").click(); app.ui("invite-dismiss").click();
+    app.ui("invite-create").focus(); clipboard.resolve(); await flush(); assert(app.ui("invite-result").hidden); assert.equal(app.ui("new-invite-token").value, ""); assert.equal(app.document.activeElement, app.ui("invite-create")); assert(!app.ui("notice").textContent.includes("系统复制")); app.stop();
   });
   await test("24-hour expiry removes preview, ZIP eligibility and retry", async () => {
     const item = job("soon", "succeeded", { expires_at: NOW / 1000 + 1 }); const app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/soon": () => response(detail(item)) } }); await flush();

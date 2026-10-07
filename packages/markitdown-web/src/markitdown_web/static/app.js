@@ -21,7 +21,7 @@
   let session = null, usage = null, epoch = 0, authBusy = false, authMode = "login", logoutToken = null, logoutUserId = null, logoutBusy = false;
   let pending = [], nextFileId = 1, jobs = [], selectedId = null, selectedDocument = null, view = "preview", renderedDocument = null;
   let uploadBusy = false, uploadUncertain = false, archiveBusy = false, jobsBusy = false, jobsSequence = 0, detailSequence = 0, detailLoading = false, detailError = "", detailController = null;
-  let navigation = "workspace";
+  let navigation = "workspace", copySequence = 0;
   let selectedEngine = "markitdown", historyFilter = "all", uploadKey = null, uploadPayload = null;
   let adminSettings = null, settingsBusy = false, settingsDirty = false, auditBusy = false, auditSequence = 0;
   let pollTimer = null, expiryTimer = null, dragDepth = 0, adminSequence = 0, adminBusy = false, inviteBusy = false, sessionRefreshBusy = false;
@@ -79,7 +79,7 @@
   function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
   function actionButton(action, id, text, label, disabled = false) { const node = element("button", "file-action", text); node.type = "button"; node.dataset.action = action; node.dataset.id = String(id); node.setAttribute("aria-label", label); node.disabled = disabled; return node; }
   function revokeUrls() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); }
-  function clearInvite() { ui["new-invite-token"].value = ""; ui["invite-expiry"].textContent = ""; ui["invite-result"].hidden = true; ui["invite-create"].disabled = inviteBusy; }
+  function clearInvite() { copySequence += 1; ui["new-invite-token"].value = ""; ui["invite-expiry"].textContent = ""; ui["invite-result"].hidden = true; ui["invite-create"].disabled = inviteBusy; }
 
   async function request(path, { method = "GET", body, auth = true, signal, blob = false, idempotencyKey } = {}) {
     const requestEpoch = epoch;
@@ -167,6 +167,7 @@
   function navigate(next) {
     if (!session || next === "admin" && !session.user.is_admin) return;
     if (navigation === "admin" && next !== "admin") clearInvite();
+    if (navigation !== next) copySequence += 1;
     navigation = next;
     renderNavigation();
   }
@@ -334,7 +335,7 @@
     if (next.length) expiryTimer = setTimeout(() => { if (!session) return; if (selectedJob() && status(selectedJob()) === "expired") clearDocument(); render(); scheduleTimers(); }, Math.min(...next, 2147483000) + 20);
   }
 
-  function clearDocument() { detailSequence += 1; detailController?.abort(); detailController = null; selectedDocument = null; detailLoading = false; detailError = ""; }
+  function clearDocument() { copySequence += 1; detailSequence += 1; detailController?.abort(); detailController = null; selectedDocument = null; detailLoading = false; detailError = ""; }
   async function selectJob(id) {
     clearDocument(); selectedId = String(id); const job = selectedJob(); ui["copy-button"].textContent = "复制"; render();
     if (!session || !job || status(job) !== "succeeded") return;
@@ -439,7 +440,7 @@
       if (intent && intent.attempts === job.attempts) retryKey = intent.key;
       else { try { retryKey = newIdempotencyKey(); } catch (error) { notice(message(error)); return; } retryIntents.set(id, { key: retryKey, attempts: job.attempts }); }
     }
-    const currentEpoch = epoch; jobMutations.add(id); jobsSequence += 1; jobsBusy = false; clearTimeout(pollTimer); render(); notice("");
+    const currentEpoch = epoch, selectionSequence = detailSequence; jobMutations.add(id); jobsSequence += 1; jobsBusy = false; clearTimeout(pollTimer); render(); notice("");
     try {
       const data = await request(`/api/jobs/${encodeURIComponent(id)}${action === "delete" ? "" : `/${action}`}`, { method: action === "delete" ? "DELETE" : "POST", idempotencyKey: retryKey });
       jobsSequence += 1; jobsBusy = false;
@@ -449,7 +450,11 @@
         announce("已删除文件与记录");
       } else {
         if (String(data.id) !== id || !Object.hasOwn(statusNames, data.status)) throw new Error("任务响应不完整，请刷新记录确认状态。");
-        retryIntents.delete(id); jobs = jobs.map((item) => String(item.id) === id ? data : item); selectedId = id; clearDocument(); announce(action === "cancel" ? "已请求取消；已用额度不退还，资源可能等待进程退出才释放" : "已重新加入转换队列，使用当前配置并再计一次额度，原到期时间不变");
+        retryIntents.delete(id); jobs = jobs.map((item) => String(item.id) === id ? data : item);
+        // Mutations update their row without stealing a more recent selection.
+        if (detailSequence === selectionSequence) { selectedId = id; clearDocument(); }
+        else if (selectedId === id) clearDocument();
+        announce(action === "cancel" ? "已请求取消；已用额度不退还，资源可能等待进程退出才释放" : "已重新加入转换队列，使用当前配置并再计一次额度，原到期时间不变");
       }
       await refreshJobs();
     } catch (error) {
@@ -475,14 +480,15 @@
     finally { if (epoch === currentEpoch) { archiveBusy = false; render(); } }
   }
   async function copy(text, success, fallback) {
-    const currentEpoch = epoch;
+    const currentEpoch = epoch, sequence = ++copySequence;
+    const current = () => epoch === currentEpoch && sequence === copySequence;
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(text);
-      if (epoch !== currentEpoch) return false;
+      if (!current()) return false;
       announce(success); return true;
     } catch {
-      if (epoch !== currentEpoch) return false;
+      if (!current()) return false;
       const previous = document.activeElement, field = element("textarea", "clipboard-buffer");
       field.value = text; field.setAttribute("readonly", ""); field.setAttribute("aria-label", "临时复制内容"); document.body.append(field);
       let copied = false;
@@ -819,8 +825,8 @@
   ui["history-list"].addEventListener("change", (event) => { const input = event.target; if (input.dataset.action !== "archive" || input.disabled) return; if (input.checked && archiveIds.size >= 10) { input.checked = false; notice("ZIP 每次最多选择 10 个文件。"); } else if (input.checked) archiveIds.add(input.dataset.id); else archiveIds.delete(input.dataset.id); render(); });
   const views = ["preview", "source", "split"];
   for (const mode of views) {
-    ui[`${mode}-tab`].addEventListener("click", () => { view = mode; renderDocument(); });
-    ui[`${mode}-tab`].addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); view = event.key === "Home" ? views[0] : event.key === "End" ? views[views.length - 1] : views[(views.indexOf(mode) + (event.key === "ArrowRight" ? 1 : views.length - 1)) % views.length]; renderDocument(); ui[`${view}-tab`].focus(); });
+    ui[`${mode}-tab`].addEventListener("click", () => { copySequence += 1; view = mode; renderDocument(); });
+    ui[`${mode}-tab`].addEventListener("keydown", (event) => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); copySequence += 1; view = event.key === "Home" ? views[0] : event.key === "End" ? views[views.length - 1] : views[(views.indexOf(mode) + (event.key === "ArrowRight" ? 1 : views.length - 1)) % views.length]; renderDocument(); ui[`${view}-tab`].focus(); });
   }
   ui["copy-button"].addEventListener("click", async () => {
     const job = selectedJob(), currentEpoch = epoch, id = selectedId;
