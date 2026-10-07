@@ -77,7 +77,7 @@
   function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
   function actionButton(action, id, text, label, disabled = false) { const node = element("button", "file-action", text); node.type = "button"; node.dataset.action = action; node.dataset.id = String(id); node.setAttribute("aria-label", label); node.disabled = disabled; return node; }
   function revokeUrls() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); }
-  function clearInvite() { ui["new-invite-token"].value = ""; ui["invite-expiry"].textContent = ""; ui["invite-result"].hidden = true; }
+  function clearInvite() { ui["new-invite-token"].value = ""; ui["invite-expiry"].textContent = ""; ui["invite-result"].hidden = true; ui["invite-create"].disabled = inviteBusy; }
 
   async function request(path, { method = "GET", body, auth = true, signal, blob = false, idempotencyKey } = {}) {
     const requestEpoch = epoch;
@@ -720,7 +720,7 @@
     finally { if (currentEpoch === epoch && seq === adminSequence) { adminBusy = false; ui["admin-refresh"].disabled = false; } }
   }
   async function createInvite() {
-    if (!session?.user.is_admin || inviteBusy) return;
+    if (!session?.user.is_admin || inviteBusy || ui["new-invite-token"].value) return;
     const ttl = Number(ui["invite-hours"].value || 24);
     if (!Number.isInteger(ttl) || ttl < 1 || ttl > 168) { adminMessage("邀请有效期须为 1–168 的整数小时。", true); return; }
     const currentEpoch = epoch; inviteBusy = true; ui["invite-create"].disabled = true; clearInvite();
@@ -729,9 +729,9 @@
       if (ui["admin-panel"].hidden) return;
       if (typeof data.token !== "string") throw new Error("邀请码响应不完整，请刷新列表后重试。");
       ui["new-invite-token"].value = data.token; ui["invite-expiry"].textContent = `${utc(data.expires_at)} 到期 · ${localTime(data.expires_at)} · 一次性使用`; ui["invite-result"].hidden = false;
-      adminMessage("邀请码已生成。仅分享给你希望加入的成员。"); adminSequence += 1; adminBusy = false; await refreshAdmin();
+      adminMessage("邀请码已生成。请先复制并隐藏当前邀请码，再生成下一条；仅分享给你希望加入的成员。"); adminSequence += 1; adminBusy = false; await refreshAdmin();
     } catch (error) { if (!stale(error) && epoch === currentEpoch) adminMessage(message(error), true); }
-    finally { if (epoch === currentEpoch) { inviteBusy = false; ui["invite-create"].disabled = false; } }
+    finally { if (epoch === currentEpoch) { inviteBusy = false; ui["invite-create"].disabled = Boolean(ui["new-invite-token"].value); } }
   }
   async function revokeInvite(button) {
     if (!session?.user.is_admin || button.disabled) return;

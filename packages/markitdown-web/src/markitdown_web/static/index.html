@@ -83,7 +83,7 @@
             <div class="admin-grid">
               <section aria-labelledby="invites-heading"><h3 id="invites-heading">邀请新成员</h3><p class="field-help">单次邀请，注册成功后消耗。撤销只影响尚未注册的邀请。</p>
                 <div class="invite-controls"><label for="invite-hours">有效期（1–168 小时）<select id="invite-hours"><option value="1">1 小时</option><option value="12">12 小时</option><option value="24" selected>24 小时</option><option value="72">3 天</option><option value="168">7 天</option></select></label><button type="button" class="choose-button" id="invite-create">生成单次邀请码</button></div>
-                <div class="invite-result" id="invite-result" hidden><label for="new-invite-token">新邀请码 · 仅本次显示，请及时复制</label><input id="new-invite-token" readonly autocomplete="off"><p id="invite-expiry"></p><button type="button" class="text-button" id="invite-copy">复制邀请码</button><button type="button" class="text-button" id="invite-dismiss">隐藏邀请码</button></div>
+                <div class="invite-result" id="invite-result" hidden><label for="new-invite-token">新邀请码 · 仅本次显示，请及时复制</label><input id="new-invite-token" readonly autocomplete="off"><p id="invite-expiry"></p><button type="button" class="text-button" id="invite-copy">复制邀请码</button><button type="button" class="text-button" id="invite-dismiss">隐藏并准备下一条</button></div>
                 <ul class="admin-list" id="invites-list" aria-label="邀请码列表"></ul>
               </section>
               <section aria-labelledby="users-heading"><h3 id="users-heading">账户与额度</h3><p class="field-help" id="user-defaults">正在读取系统默认值…</p><p class="field-help">账户额度与大小调整在后续准入时生效，不退还已用次数。停用会撤销会话并阻止结果发布；正在运行的任务可能等待进程退出才回收资源。每日额度按 UTC 00:00 重置。</p><ul class="admin-list" id="users-list" aria-label="账户与额度"></ul></section>

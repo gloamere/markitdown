@@ -482,6 +482,15 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.ui("manifest-download").click(); assert.equal(app.document.downloads[0].href, "/api/jobs/expired-manifest/manifest"); app.stop();
   });
 
+  await test("fast completed invite double-click cannot replace its only visible token", async () => {
+    let count = 0;
+    const app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "POST /api/admin/invites": () => response({ token: `synthetic-${++count}`, expires_at: NOW / 1000 + 86400 }) } });
+    await flush(); app.ui("admin-toggle").click(); await flush();
+    app.ui("invite-create").click(); await flush(); assert.equal(count, 1); assert(app.ui("invite-create").disabled);
+    app.ui("invite-create").click(); app.ui("invite-create").emit("click"); await flush(); assert.equal(count, 1); assert.equal(app.ui("new-invite-token").value, "synthetic-1");
+    app.ui("invite-dismiss").click(); assert(!app.ui("invite-create").disabled); app.ui("invite-create").click(); await flush(); assert.equal(count, 2); assert.equal(app.ui("new-invite-token").value, "synthetic-2"); app.stop();
+  });
+
   await test("local development boundary is visible before login and production is conditional", async () => {
     const local = createApp({ config: { ...baseConfig, deployment_mode: "local" } }); await flush(); assert(local.ui("deployment-notice").textContent.includes("没有完整生产文件系统隔离")); local.stop();
     const production = createApp({ config: { ...baseConfig, deployment_mode: "production" } }); await flush(); assert(production.ui("deployment-notice").textContent.includes("验收")); assert(production.ui("deployment-notice").textContent.includes("拒绝解析")); production.stop();
