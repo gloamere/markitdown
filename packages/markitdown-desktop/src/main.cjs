@@ -87,10 +87,12 @@ async function connect(value) {
     const workspace = await isolated.fetch(`${origin}/app`, { redirect: "error", signal: AbortSignal.any([connectionAbort.signal, AbortSignal.timeout(12000)]) });
     if (!workspace.ok || workspace.redirected || !workspace.headers.get("content-type")?.includes("text/html")) throw new Error("此服务缺少兼容的 /app 工作区，请联系管理员升级服务后重试。");
     if (attempt !== generation) throw new Error("连接已取消。");
-    candidate = new BrowserWindow({ width: 1440, height: 960, minWidth: 960, minHeight: 700, backgroundColor: "#f6f7fb", title: "MarkItDown · 文档工作台", show: false,
+    candidate = new BrowserWindow({ width: 1440, height: 960, minWidth: 960, minHeight: 700, backgroundColor: "#f6f7fb", title: `MarkItDown · ${origin}`, show: false,
       webPreferences: { ...preferences, session: isolated } });
     desk = candidate;
     lockContents(candidate.webContents, origin);
+    // Keep the selected service visible outside the remote page's control.
+    candidate.on("page-title-updated", (event) => event.preventDefault());
     isolated.on("will-download", async (event, item, contents) => {
       if (contents !== desk?.webContents || !allowedDownload(item.getURL(), currentOrigin) || !sameService(contents.getURL(), currentOrigin)) { event.preventDefault(); return; }
       item.setSaveDialogOptions({ title: "保存转换结果", defaultPath: path.join(app.getPath("downloads"), safeFilename(item.getFilename())) });

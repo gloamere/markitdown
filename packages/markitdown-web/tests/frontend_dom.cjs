@@ -56,13 +56,13 @@ class Element {
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   closest(selector) { return this.matches(selector) ? this : this.parent?.closest(selector) || null; }
 }
-function createApp({ config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, legacyCopy = false } = {}) {
+function createApp({ origin = "https://workspace.example.com:8443", config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, legacyCopy = false } = {}) {
   const document = { activeElement: null, listeners: {}, downloads: [], addEventListener(kind, fn) { this.listeners[kind] = fn; }, createElement(tag) { return new Element(tag, this); }, createDocumentFragment() { return this.createElement("fragment"); } };
   document.body = document.createElement("body"); document.execCommand = () => legacyCopy;
   const elements = {};
   for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) { const node = document.createElement(match[1]); node.id = match[3]; node.hidden = /\bhidden\b/.test(match[2]); node.disabled = /\bdisabled\b/.test(match[2]); elements[node.id] = node; }
   document.getElementById = (id) => { assert(elements[id], `Unknown HTML id: ${id}`); return elements[id]; };
-  const window = { listeners: {}, confirmations: [], confirmResult: true, confirm(text) { this.confirmations.push(text); return this.confirmResult; }, addEventListener(kind, fn) { this.listeners[kind] = fn; } };
+  const window = { location: { origin }, listeners: {}, confirmations: [], confirmResult: true, confirm(text) { this.confirmations.push(text); return this.confirmResult; }, addEventListener(kind, fn) { this.listeners[kind] = fn; } };
   let time = NOW, timerId = 0; const timers = new Map(), urls = new Set(), revoked = [], requests = [], copies = [];
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [time])); } static now() { return time; } }
   class FormData { constructor() { this.parts = []; } append(...values) { this.parts.push(values); } }
@@ -94,6 +94,18 @@ function createApp({ config = baseConfig, me = null, jobs = [], usage, routes = 
 const scenarios = [];
 async function test(name, fn) { await fn(); scenarios.push(name); }
 (async () => {
+  await test("processing destination uses the real origin before and after authentication", async () => {
+    for (const origin of ["https://workspace.example.com:8443", "http://127.0.0.1:8765", "http://[::1]:8765"]) {
+      const app = createApp({ origin, config: { ...baseConfig, service_name: "Local / offline", origin: "https://untrusted.example" } }); await flush();
+      assert.equal(app.ui("processing-origin").textContent, origin);
+      assert.equal(app.ui("service-state").textContent, "服务配置已读取");
+      assert(!app.ui("auth-section").hidden);
+      app.state.me = identity(); app.ui("reconnect-button").click(); await flush();
+      assert.equal(app.ui("processing-origin").textContent, origin);
+      app.ui("logout-button").click(); await flush();
+      assert.equal(app.ui("processing-origin").textContent, origin); app.stop();
+    }
+  });
   await test("first-run bootstrap and config reconnect", async () => {
     const app = createApp({ config: { ...baseConfig, has_admin: false } }); await flush();
     assert(!app.ui("bootstrap-notice").hidden); assert(app.ui("login-button").disabled); assert(app.ui("session-section").hidden); assert(html.includes("markitdown-web bootstrap-admin"));

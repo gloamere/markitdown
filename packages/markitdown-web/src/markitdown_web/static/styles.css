@@ -417,3 +417,7 @@ h1{font-size:24px}
 .file-meta{font-size:10px}
 .history-filters button{font-size:10px}
 }
+
+.processing-destination{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:11px;line-height:1.8;color:var(--muted);margin:0 0 10px}
+#processing-origin{font-family:ui-monospace,SFMono-Regular,monospace;color:#365e4a;overflow-wrap:anywhere;max-width:100%;unicode-bidi:isolate}
+.processing-explanation{font-size:10px}

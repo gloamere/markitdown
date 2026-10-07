@@ -3,7 +3,7 @@
   "use strict";
   const $ = (id) => document.getElementById(id);
   const ui = Object.fromEntries([
-    "nav-workspace", "nav-history", "service-state", "page-title", "view-eyebrow", "view-description", "workspace", "workspace-overview", "workspace-heading", "input-heading-label", "upload-section", "submit-section",
+    "nav-workspace", "nav-history", "service-state", "processing-origin", "page-title", "view-eyebrow", "view-description", "workspace", "workspace-overview", "workspace-heading", "input-heading-label", "upload-section", "submit-section",
     "auth-section", "session-section", "bootstrap-notice", "login-tab", "register-tab", "login-form", "register-form",
     "login-username", "login-password", "register-username", "register-password", "invite-token", "login-button", "register-button", "auth-message",
     "logout-button", "logout-retry", "account-name", "account-role", "quota-summary", "quota-reset", "connection-notice", "connection-message", "reconnect-button", "notice",
@@ -159,7 +159,9 @@
     ui["page-title"].textContent = !session ? "欢迎来到你的工作台" : admin ? "管理后台" : history ? "任务与历史" : "文档转换";
     ui["view-eyebrow"].textContent = admin ? "WORKSPACE / ADMINISTRATION" : history ? "WORKSPACE / HISTORY" : "MARKITDOWN / WORKSPACE";
     ui["view-description"].textContent = admin ? "管理成员、邀请、业务设置与审计记录。" : history ? "跟踪任务状态，找回结果并及时导出。" : "将文件转换为 Markdown，继续你的阅读、编辑与创作。";
-    ui["service-state"].textContent = !ready ? "服务连接待确认" : "已连接服务";
+    ui["service-state"].textContent = !ready ? "服务连接待确认" : "服务配置已读取";
+    // Use the actual page origin, never a server-provided display name or URL.
+    ui["processing-origin"].textContent = window.location.origin;
   }
 
   function navigate(next) {

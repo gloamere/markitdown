@@ -38,6 +38,12 @@ const { launchApp } = require("./launch-app.cjs"), assert = require("node:assert
     const desk = await deskPromise;
     await desk.waitForSelector("h1");
     assert.equal(await desk.locator("h1").textContent(), "Connected");
+    const expectedTitle = `MarkItDown · http://127.0.0.1:${server.address().port}`;
+    const nativeTitle = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().startsWith("http://127.0.0.1:")).getTitle());
+    assert.equal(await nativeTitle(), expectedTitle);
+    await desk.evaluate(() => { document.title = "Local offline conversion"; });
+    await desk.waitForTimeout(100);
+    assert.equal(await nativeTitle(), expectedTitle);
     assert.equal(requests, 3); // one config, workspace probe and workspace, no duplicate connect
     assert.equal(await desk.evaluate(() => typeof window.desktop), "undefined");
     assert.equal(await desk.evaluate(() => typeof window.require), "undefined");

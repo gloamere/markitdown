@@ -128,3 +128,8 @@ ORT_DISABLE_TELEMETRY=1 .venv/bin/python scripts/verify-desktop-service.py --out
 新增桌面 CI 验证 Mac/Windows 构建和连接流程，Mac 另验证真实服务业务流程；
 浏览器 CI 另验证官网。确切远端 SHA 与最新 CI 结果以最终交付中的链接为准。
 没有通过或未执行的检查不能借用旧 v1.0.0 结果。
+
+## 后续小幅优化
+
+竞品启发、已核实功能与分阶段开发状态见
+[桌面后续设计与调整](DESKTOP-REFINEMENTS.zh-CN.md)。
