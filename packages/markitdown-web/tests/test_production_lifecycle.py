@@ -85,7 +85,8 @@ def _identity(pid):
     """Observe PID plus kernel start time, avoiding PID-reuse false positives."""
     try:
         raw = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # procfs reports ENOENT or ESRCH if exit races the open/read operation.
         return None
     fields = raw[raw.rfind(")") + 2 :].split()
     return {
@@ -104,6 +105,26 @@ def _alive(identity):
         and current["start"] == identity["start"]
         and current["state"] not in {"Z", "X"}
     )
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError, ProcessLookupError])
+def test_lifecycle_identity_handles_confirmed_process_disappearance(
+    monkeypatch, failure
+):
+    def read(_path):
+        raise failure("Synthetic exited process")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert _identity(123) is None
+
+
+def test_lifecycle_identity_does_not_hide_permission_errors(monkeypatch):
+    def read(_path):
+        raise PermissionError("Synthetic observation denial")
+
+    monkeypatch.setattr(Path, "read_text", read)
+    with pytest.raises(PermissionError):
+        _identity(123)
 
 
 def _tree(root, settings, token, ready):

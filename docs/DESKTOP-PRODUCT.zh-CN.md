@@ -65,12 +65,12 @@ macOS Apple Silicon：DMG 与 ZIP，最低 macOS 12。Windows x64：NSIS EXE。
 
 2026-10-07，本轮工作区本地通过：
 
-- `bash scripts/check-web.sh`：Ruff/Black/Mypy，654 Web 测试通过、8 条平台/运行时条件跳过；7/7 合成格式检查，9 个浏览器 runner 自检，8 个 Docling 工具测试，202 上游离线格式测试，60 DOM/状态场景。
+- `bash scripts/check-web.sh`：Ruff/Black/Mypy，657 Web 测试通过、8 条平台/运行时条件跳过；7/7 合成格式检查，9 个浏览器 runner 自检，8 个 Docling 工具测试，202 上游离线格式测试，60 DOM/状态场景。
 - 真实沙箱 Chromium runner：12 组 API/上传/权限/管理/下载/冲突/退出中断/返回/390 与 320 窄屏流程通过。这里不运行真实用户研究或生产 Docling 模型。
 - 真实 Electron 连接流程：HTTPS 拒绝、旧服务升级提示、取消、重复提交、沙箱/无远程桥、导航拒绝、返回连接页。
 - 真实 Electron + 独立服务：合成成员登录、真实 Markdown 转换、重复上传仅扣 1 次、历史/源码/对照、DownloadItem 保存字节和取消、真实迟到结果被退出阻止、返回。原生保存目的地在测试中被确定化，未宣称人工对话框或安装体验验收。
-- 官网真实 Chromium：1440 / 390 / 320 宽度、无水平溢出、实际截图正常加载、FAQ/锚点交互、真实安装包下载的大小与 SHA256。
-- 本机 Mac arm64 DMG / ZIP 实际生成。开发版原生界面测试不等于从下载包安装的系统验收。Windows 构建和连接 smoke 的 CI 状态独立记录；完整 Windows 业务/安装体验没有人工验收。
+- 官网真实 Chromium：1440 / 390 / 320 宽度、无水平溢出、实际截图正常加载、FAQ/锚点交互，Mac DMG 和 Windows EXE 两项实际下载的大小与 SHA256 均通过。
+- 本机 Mac arm64 DMG / ZIP 实际生成。Windows x64 EXE 已从成功的 Actions 构建下载到本机。开发版原生界面测试不等于从下载包安装的系统验收；完整 Windows 业务/安装体验没有人工验收。
 
 本地截图与原始 JSON 保留在被忽略的 `docs/evidence/desktop-ui/`，只含
 合成输入。Codex 已对实际像素检查桌面、登录/退出、管理、历史/对照和官网
@@ -81,6 +81,30 @@ macOS Apple Silicon：DMG 与 ZIP，最低 macOS 12。Windows x64：NSIS EXE。
 两项已有跨平台测试问题修正了测试工具而非安全边界：macOS 在生产路径
 检查前拒绝 Linux 沙箱，因此其固定安全错误码应被断言；格式评估器对自己
 创建的临时目录 resolve，避开 macOS `/var` 别名，转换器仍拒绝符号链接输入。
+
+第一节 CI 的生产进程生命周期测试曾遇到 procfs 退出竞态：进程在读取
+`/proc/<pid>/stat` 时消失，Linux 返回 ESRCH。观察器现在只将 ENOENT 与
+ESRCH 视为进程消失，权限错误继续失败；三个回归用例验证这条边界。
+安全执行器与生产权限没有更改。第二节完整 24 项 CI 和双端构建已通过。
+
+双端实际构建来自代码 `49ef02d0444a3f9a992f58cad261a36c4cd872eb`：
+[Mac/Windows 构建及 smoke](https://github.com/gloamere/markitdown/actions/runs/37639261480)，
+[完整测试](https://github.com/gloamere/markitdown/actions/runs/37639271678)。
+最终测试观察器修复不改变这两个安装包的运行时代码。
+
+## 查看成果
+
+交付时独立预览使用随机回环端口和临时空数据库，具体存活地址以最终交付
+为准。官网与安装包下载可直接查看；`/app` 显示真实连接/登录界面，因为
+该预览没有初始化账户。不会为演示填写真实管理员密码。完整任务和管理
+页面的合成验收截图分别位于 `docs/evidence/desktop-ui/native-committed/`
+和 `docs/evidence/desktop-ui/browser-final/screenshots/`，官网最终截图位于
+`docs/evidence/desktop-ui/site-final/`。
+
+Mac 可直接查看本机实际构建 `packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app`；
+或从预览官网下载未签名 DMG。Windows EXE 同样通过官网实际下载。
+这些路径不表示系统安装签名验收已完成。预览停止后，操作者可用新的私有
+目录和空闲端口运行 `.venv/bin/python -m markitdown_web serve --port PORT --data-dir DIRECTORY`。
 
 ## 复验
 
