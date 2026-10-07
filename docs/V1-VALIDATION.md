@@ -1,6 +1,6 @@
 # v1 candidate engineering status
 
-Latest completed CI checkpoint: `8ec3e788bc5549dd5f41da5112c69a269a580e88`.
+Last fully green checkpoint: `8ec3e788bc5549dd5f41da5112c69a269a580e88`.
 This is still a **candidate**. The installed application version remains 0.2.0
 until the fixed code-release closure checks below pass. Main remains at 4cc9fa1;
 no server was deployed. Real-user research is deferred; engineering checks are not.
@@ -40,10 +40,9 @@ claim. Browser assertions and captured-but-unreviewed pixels are not visual sign
    unchanged profile: cancellation, timeout, service-parent death, tree death/reap,
    slot retention and no late publication; scratch cleanup is checked for the
    supervised cancellation/timeout cases. Final-version CI must rerun them
-2. **Partially passed on 2b99a5e:** five pinned public model files, fresh probe,
-   two-page preflight/conversion/independent preview. Three-page rejection failed
-   and final cleanup verification was not reached. The earlier 30-case local run
-   is not production proof
+2. **Passed on ba32c373:** five pinned public model files, fresh probe, two-page
+   preflight/conversion/independent preview, canonical three-page refusal and
+   cleanup. Final-version CI must rerun this bounded production smoke
 3. Complete applicable actual visual review and the paused Mac invitation-fix,
    administrator-settings and narrow-screen checks
 4. Final version-bearing source/wheel parity, aggregate regression and exact-SHA
@@ -124,3 +123,18 @@ and lint/format/type/syntax. Independent read-only review found no concrete flaw
 and passed 22 targeted portable exit/fail-closed regressions. Live CI must still
 confirm the corrected exact commit; these results do not retrospectively identify
 the prior run's erased exception.
+
+
+## Current checkpoint (ba32c373)
+
+Production job 112662201793 passed 62 sandbox/lifecycle tests, seven standard
+formats and all seven Docling stages, including `page_limit` refusal and cleanup.
+All 12 real-Chromium scenarios and pre-commit passed. The unaffected Python 3.14
+core matrix job is still running at this documentation checkpoint; its completion
+must be verified before calling the whole exact-SHA CI green.
+
+The candidate wheel built successfully: `markitdown_web-0.2.0-py3-none-any.whl`,
+120,737 bytes, SHA256 `70671800483e66884e8c3c9627d1027d41a5f0250919d99fb7db3f32d21b31df`.
+All 18 packaged source/static files byte-match ba32c373, and version/license
+metadata checks passed. This remains a candidate artifact, not v1.0.0; actual
+visual review and the final version-bearing package/regression/CI remain open.

@@ -4,8 +4,8 @@ This is a **deployment contract and image recipe with open runtime gates**, not
 evidence that the service is ready for public use. Initial cloud verification
 ran local conversion, native seccomp and cancellation checks; its existing policy
 blocked production namespace launch. Separately declared Ubuntu 22.04 CI then
-passed the positive boundary and seven standard formats on 8ec3e78. The remaining
-fixed lifecycle/Docling checks are listed in [V1-VALIDATION](V1-VALIDATION.md).
+passed the positive boundary and seven standard formats on 8ec3e78. On ba32c373, real lifecycle and all seven Docling smoke stages also passed.
+Remaining release checks are listed in [V1-VALIDATION](V1-VALIDATION.md).
 No host settings were changed or relaxed.
 
 ## Local and production are deliberately different
@@ -240,7 +240,7 @@ This is temporary validation infrastructure requiring migration, not the intende
 production operating-system decision. The actual deployment host remains unknown
 and unverified. The positive 8ec3e78 isolation/standard-format result applies only to its tested
 image, launcher digest and runner. Physical capacity/TLS remain deployment checks;
-production Docling and real lifecycle integration checks are tracked separately.
+production Docling and real lifecycle integration also passed on ba32c373.
 
 Sources: [runner retirement](https://github.com/actions/runner-images/issues/14254),
 [Ubuntu namespace policy](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces),
@@ -263,3 +263,18 @@ The next run is a separately identified artifact, even if its source is unchange
 
 The source identity is recorded, not an assertion of byte-reproducible apt builds.
 Neither this result nor the image marker authorizes an unknown deployment host.
+
+
+## Executed lifecycle/Docling identity (ba32c373)
+
+[Production job 112662201793](https://github.com/gloamere/markitdown/actions/runs/37581567228/job/112662201793)
+passed 62 sandbox/lifecycle checks, all seven standard formats and all seven
+production Docling smoke stages. The runner was Ubuntu 22.04.5, hosted image
+`20260927.309.1`, runner `2.337.0`, kernel `Linux 6.8.0-1064-azure x86_64`.
+
+Runtime image: `sha256:19fd4405ca54c9ccf9ed553d99dae68f0f02a861af1dbd6a61fcf8358c51e202`.
+The verified Python/uv base digests, Bubblewrap source release and built-binary
+hash match the preceding 8ec3e78 identities. No host security settings changed;
+Bubblewrap was non-setuid. This additionally proves the finite synthetic
+cancellation/timeout/parent-death cases and the pinned two-page Docling path,
+three-page refusal and cleanup. It does not prove target-host capacity or TLS.

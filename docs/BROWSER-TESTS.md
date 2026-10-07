@@ -8,12 +8,12 @@ outside pytest's automatic `test_*.py` collection.
 
 ## Current evidence status
 
-The runner was prepared on 2026-10-07. Ruff, Black, Python compilation and its
-eight stdlib-only self-checks passed. **This runner has not been executed in a
-real browser yet.** The preparation VM's browser/socket restriction remains a
-blocker; no browser launch, proxy workaround, security change or package/browser
-installation was attempted as part of preparing this runner. Any separate
-manual-browser evidence must identify its own exact commit and browser.
+The real sandboxed Chromium runner has passed all 12 scenarios in CI, most
+recently on `ba32c373`. Its nine local self-checks also pass. Actual visual review
+and the remaining Mac checks are still pending; automated assertions and
+unreviewed screenshots do not establish visual signoff. The earlier preparation
+VM socket restriction was not bypassed; the separate CI target uses its normal
+host policy and keeps Chromium's sandbox enabled.
 
 Passing syntax or self-checks is not a passed browser gate. Running this harness
 successfully still requires a separate review of its actual PNGs. It does not
@@ -157,7 +157,8 @@ Screenshots and downloads contain only synthetic data, but treat the evidence
 directory as private until reviewed. No browser storage-state/cookie export is
 produced. Do not publish a failure artifact containing unexpected sensitive data.
 
-The initial Ubuntu 24.04 job failed at sandbox launch, not at application checks.
+Historically, the initial Ubuntu 24.04 job failed at sandbox launch, before any
+application checks; later Ubuntu 22.04 runs passed all 12 scenarios.
 The declared Ubuntu 22.04 target keeps Chromium sandboxing enabled and uses its
 normal host policy; it retires on 2027-04-17 and is not a long-term baseline. Failure
 is still blocking. Private Mac review supplies visual evidence; unreviewed CI

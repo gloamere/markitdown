@@ -40,11 +40,11 @@ git push origin dev
 
 1. 提交 `dev → main` PR，审查功能、安全边界和依赖变更
 2. 运行 Web 检查、上游相关格式回归，并检查该提交的 CI 结果
-3. 对实际目标系统进行人工验收；公开部署需复核身份与权限、配置 HTTPS 和全局请求限流、补齐 OS 级解析隔离并确认数据保留策略（见 MULTIUSER-RELEASE.zh-CN.md）
-4. 获得明确发布/合并批准后，再将验收版本合并到 `main` 并标记版本
+3. 对实际目标系统进行人工验收；公开部署需复核身份与权限、配置 HTTPS 和全局请求限流、验证目标主机上的既有 OS 级解析隔离并确认数据保留策略（见 MULTIUSER-RELEASE.zh-CN.md）
+4. 代码版本标签只指向已通过最终验收的 `dev` 提交；合并 `main` 和生产部署仍需各自明确批准
 
 建 PR 只代表提供审阅入口，不代表已批准生产发布。仓库保留上游 CI；本次新增 Web 检查通过 `scripts/check-web.sh` 执行。
 
 ### 当前 CI 注意事项
 
-本次开发提交带 `[skip ci]`，不会声称 GitHub CI 已通过。原因是上游 workflow 未在 Python 启动前设置 ONNX Runtime 的遥测关闭变量，而当前 GitHub CLI 凭证不含 `workflow` 权限。已在 Web 应用和本地检查脚本中关闭遥测，并实际完成本地检查。启用远程检查前，应先获授权为所有 Python 测试 job 设置 `ORT_DISABLE_TELEMETRY: "1"`，再补充 Web 检查 job、去掉 skip 标记并验证该提交的 CI。
+早期开发检查点曾跳过远程 CI；当前 v1 检查点已运行 GitHub Actions，不再使用 `[skip ci]`。全部 Python 测试任务在导入前关闭遥测，并包含 Web、真实浏览器和生产隔离作业。各精确提交的实际结果及未完成检查见 [V1-VALIDATION.md](V1-VALIDATION.md)。历史凭证能力不代表当前工作流状态；没有静默增加权限或凭据。
