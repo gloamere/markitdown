@@ -13,7 +13,8 @@ env:
 
 jobs:
   browser-e2e:
-    runs-on: ubuntu-24.04
+    # Transitional default-policy compatibility target; retires 2027-04-17.
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,17 +30,10 @@ jobs:
           .venv/bin/python -m playwright install --with-deps chromium
       - name: Run fresh-profile synthetic browser flows with Chromium sandbox enabled
         run: .venv/bin/python packages/markitdown-web/tests/browser_e2e.py --out "${{ runner.temp }}/markitdown-browser-evidence"
-      - name: Preserve synthetic screenshots and machine-readable results
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1, verified official tag
-        with:
-          name: markitdown-browser-evidence
-          path: ${{ runner.temp }}/markitdown-browser-evidence
-          retention-days: 7
-          if-no-files-found: warn
 
   production-sandbox:
-    runs-on: ubuntu-24.04
+    # Same mandatory namespaces/profile; no Ubuntu 24.04 policy overrides.
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,12 +42,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Install distro namespace launcher and pinned web test environment
+      - name: Install official launcher build dependencies and pinned web tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo apt-get install -y --no-install-recommends build-essential meson ninja-build pkg-config libcap-dev libselinux1-dev
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements-web.lock
+      - name: Build verified official non-setuid Bubblewrap in runner temp
+        run: bash scripts/ci/build-bubblewrap.sh
       - name: Verify production boundary without relaxing host policy
         run: bash scripts/ci/production-sandbox.sh
 

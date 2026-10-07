@@ -58,8 +58,8 @@ The runner records the actual Chromium version. Playwright's documented
 is explicitly set to `True`; the harness supplies no extra Chromium flags.
 
 For CI, allow roughly 15 minutes including cold dependency/browser installation.
-The included PR workflow uses a dedicated job on a sandbox-capable runner and
-uploads the complete output directory even when the command fails. If Actions
+The included PR workflow uses a dedicated job on a transitional Ubuntu 22.04 sandbox-capable runner with
+public pass/fail summaries only. Raw screenshots/downloads are not uploaded. If Actions
 or the job has not executed, the gate is **not run**, not passed. Do not use `continue-on-error` to represent a failing browser
 job as passing. The workflow is maintained separately from this runner.
 
@@ -156,3 +156,9 @@ note linked to the same commit/run and screenshot hashes. Check at least:
 Screenshots and downloads contain only synthetic data, but treat the evidence
 directory as private until reviewed. No browser storage-state/cookie export is
 produced. Do not publish a failure artifact containing unexpected sensitive data.
+
+The initial Ubuntu 24.04 job failed at sandbox launch, not at application checks.
+The declared Ubuntu 22.04 target keeps Chromium sandboxing enabled and uses its
+normal host policy; it retires on 2027-04-17 and is not a long-term baseline. Failure
+is still blocking. Private Mac review supplies visual evidence; unreviewed CI
+screenshots do not count as visual acceptance.

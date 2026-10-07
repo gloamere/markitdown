@@ -213,6 +213,10 @@ def command(
     argv = [
         str(bwrap),
         "--unshare-all",
+        # --unshare-all uses "try" variants upstream. Explicit requirements
+        # prohibit silently omitting user/cgroup namespaces on older kernels.
+        "--unshare-user",
+        "--unshare-cgroup",
         "--die-with-parent",
         "--disable-userns",
         "--cap-drop",

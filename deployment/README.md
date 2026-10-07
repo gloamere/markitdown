@@ -60,8 +60,10 @@ approved retention policy. Record observed restore duration; no RTO/RPO promised
 
 ## Prepared CI production-boundary job
 
-The PR workflow now contains a bounded Ubuntu 24.04 job. It uses existing runner
-Docker access, installs distro Bubblewrap, and first checks required namespaces.
+The PR workflow now contains a bounded transitional Ubuntu 22.04 job. It uses existing runner
+Docker access, builds reviewed checksum-pinned Bubblewrap 0.13.0 into runner temp,
+and first checks required namespaces. The earlier Ubuntu 24.04 attempt failed
+under its default policy; no policy overrides were made.
 It does not change sysctl, grant container privileges, add credentials, enable
 unconfined security options or use a weakened fallback. A denied prerequisite
 fails the job. Official Python3.12.14 and uv0.12.19 image versions are checked,
@@ -80,3 +82,10 @@ repository showed zero workflow runs. The repository owner subsequently enabled
 Actions; this checkpoint requests a new PR run. Exact job results must be checked
 before claiming positive evidence. No permissions or secrets were expanded by
 this work, and the application remains loopback-only.
+
+The transitional GitHub Ubuntu 22.04 runner retires on 2027-04-17 and needs migration.
+It is a test-only compatibility decision, not production OS approval. Runtime
+selection/provenance details and sources are in docs/SANDBOX-RUNTIME.md.
+Browser screenshots/downloads are not uploaded to GitHub; only content-free test
+status and diagnostic locations enter public CI logs. Private visual review
+remains separate. The initial failure-only artifact is left unchanged.

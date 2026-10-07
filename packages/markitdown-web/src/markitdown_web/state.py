@@ -37,7 +37,11 @@ class Settings:
             else None
         )
     )
-    sandbox_bwrap: Path = Path("/usr/bin/bwrap")
+    sandbox_bwrap: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("MARKITDOWN_SANDBOX_BWRAP", "/usr/bin/bwrap")
+        )
+    )
     sandbox_python: str = "/usr/bin/python3"
     sandbox_docling_python: str = "/opt/docling/bin/python"
     global_concurrency: int = 2

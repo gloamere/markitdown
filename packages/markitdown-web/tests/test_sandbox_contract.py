@@ -107,6 +107,7 @@ def test_production_command_mounts_only_approved_paths(image_settings):
         suffix=".txt",
     )
     assert "--unshare-all" in argv and "--disable-userns" in argv
+    assert "--unshare-user" in argv and "--unshare-cgroup" in argv
     assert "--share-net" not in argv and "--unshare-user-try" not in argv
     assert "--not-a-security-boundary" not in argv
     assert str(image_settings.data_dir) not in argv
@@ -302,7 +303,9 @@ def test_actual_linux_boundary_hides_files_network_and_processes(tmp_path):
         deployment_mode="production",
         data_dir=tmp_path,
         sandbox_runtime_root=Path(os.environ["MARKITDOWN_TEST_RUNTIME_ROOT"]),
-        sandbox_bwrap=Path("/usr/bin/bwrap"),
+        sandbox_bwrap=Path(
+            os.environ.get("MARKITDOWN_SANDBOX_BWRAP", "/usr/bin/bwrap")
+        ),
         sandbox_python=os.environ.get(
             "MARKITDOWN_TEST_SANDBOX_PYTHON", "/usr/bin/python3"
         ),
@@ -320,6 +323,8 @@ def test_actual_linux_boundary_hides_files_network_and_processes(tmp_path):
         output=output,
         suffix=".txt",
     )
+    names = ("user", "mnt", "pid", "net", "ipc", "uts", "cgroup")
+    host_namespaces = {name: os.readlink(f"/proc/self/ns/{name}") for name in names}
     script = f"""import sys;sys.path.insert(0,'/code')
 from markitdown_web.sandbox import enforce_worker_filter
 from pathlib import Path
@@ -327,6 +332,7 @@ import os,socket,json
 enforce_worker_filter()
 r={{'source':Path('/input/source.txt').read_text(),'secret_visible':Path({str(secret)!r}).exists(),
 'host_home':Path({str(Path.home())!r}).exists(),'other_input':Path('/input/sibling').exists()}}
+r['namespaces']={{name:os.readlink('/proc/self/ns/'+name) for name in {names!r}}}
 for name,op in [('network',lambda:socket.socket()),('fork',os.fork),('setsid',os.setsid),
 ('source_write',lambda:Path('/input/source.txt').write_text('changed')),
 ('root_write',lambda:Path('/host-file').write_text('changed'))]:
@@ -349,6 +355,8 @@ Path('/output/result.json').write_text(json.dumps(r))
     finally:
         sandbox.terminate(process)
     result = json.loads(output.read_text())
+    child_namespaces = result.pop("namespaces")
+    assert all(child_namespaces[name] != host_namespaces[name] for name in names)
     assert result.pop("source") == "allowed input"
     assert result.pop("secret_visible") is False
     assert result.pop("host_home") is False

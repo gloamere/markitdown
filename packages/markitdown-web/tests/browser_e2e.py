@@ -58,6 +58,26 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def public_failure(error: BaseException) -> dict:
+    """Public CI logs contain locations/categories, never page values or files."""
+    detail = str(error)
+    category = (
+        "sandbox_unavailable"
+        if "No usable sandbox" in detail or "sandboxing failed" in detail
+        else "timeout"
+        if "Timeout" in type(error).__name__
+        else "assertion_failed"
+        if isinstance(error, AssertionError)
+        else "execution_failed"
+    )
+    locations = [
+        {"function": frame.name, "line": frame.lineno}
+        for frame in traceback.extract_tb(error.__traceback__)
+        if Path(frame.filename).name == Path(__file__).name
+    ]
+    return {"type": type(error).__name__, "category": category, "locations": locations}
+
+
 def artifact_path(root: Path, relative: str) -> Path:
     """Use only harness-selected relative destinations, never download filenames."""
     candidate = Path(relative)
@@ -1100,7 +1120,7 @@ async def run(output: Path) -> int:
         artifact_path(output, "failure.txt").write_text(
             traceback.format_exc(), encoding="utf-8"
         )
-        print(f"FAILED: {type(error).__name__}: {error}", file=sys.stderr)
+        print("FAILED " + json.dumps(public_failure(error)), file=sys.stderr)
         return 1
     finally:
         evidence.data["finished_at"] = now()
@@ -1168,6 +1188,11 @@ class HarnessSelfChecks(unittest.TestCase):
 
     def test_checks_are_unique(self):
         self.assertEqual(len(STEPS), len(set(STEPS)))
+
+    def test_public_failure_omits_private_page_values(self):
+        result = public_failure(AssertionError("private-document-and-token"))
+        self.assertNotIn("private-document-and-token", json.dumps(result))
+        self.assertEqual(result["category"], "assertion_failed")
 
 
 def main() -> int:

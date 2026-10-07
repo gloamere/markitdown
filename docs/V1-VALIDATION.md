@@ -1,7 +1,9 @@
 # v1 candidate engineering status
 
-Application source and static resources match
-`b52769e3022179960d25d97da8443d9c00f3b355`. This is a **candidate**, not a completed
+The initial completed application/UI checkpoint was
+`b52769e3022179960d25d97da8443d9c00f3b355`. Subsequent changes explicitly require
+user/cgroup namespaces and allow a reviewed startup launcher path; they need
+exact-commit CI verification. This is a **candidate**, not a completed
 production release. The installed application version remains 0.2.0 until the
 v1.0.0 engineering gates pass. Main remains at 4cc9fa1; no server was deployed.
 
@@ -37,13 +39,14 @@ real user feedback, hard RSS guarantee or production-isolation result is inferre
 3. Actual browser rendering/clipboard/download/mobile checks are a separate gate.
    This cloud Chromium also failed socket creation; no security bypass was used.
 4. The repository owner has now enabled GitHub Actions (verified 2026-10-07).
-   This checkpoint requests a fresh PR synchronization run; results are pending.
-   Prepared jobs are not executed checks, and no passing CI result is assumed.
+   Run 37576232027 on 6c3d2db completed: 22 of 24 jobs passed. Browser sandbox launch
+   and host namespace preflight failed. Pre-commit passed. A declared transitional
+   Ubuntu 22.04 compatibility target now awaits its own exact-commit results.
 5. nginx/systemd are templates; actual TLS/proxy/target host need separate approved
    staging/rollout work. Production deployment itself is outside this code task.
 
 The browser gate is being assessed on an authorized separate computer. A bounded
-Ubuntu 24.04 CI job is prepared for existing namespace capability and runtime
+transitional Ubuntu 22.04 CI job is prepared for existing namespace capability and runtime
 building, using only contents:read and no secrets, privileged containers, sysctl
 changes or unconfined options. Any denial is a job failure, never a silent skip.
 
@@ -74,3 +77,9 @@ passes and one explicit intended-host isolation skip. Counts from overlapping
 suites are not added together. The prepared GitHub jobs still require exact-commit execution and result review.
 The existing pull_request trigger has no branch/path filters; neither a main
 merge nor expanded workflow permissions is needed to request the next run.
+
+On 6c3d2db, hosted Web CI passed 505 tests with 1 explicit production test skipped,
+7/7 generated format checks,8 harness self-checks,8 installer tests and202 offline
+regressions (1 URL test excluded). All core Python/OCR/MCP matrix jobs passed.
+The two capability failures occurred before image construction or real browser
+flows. No failed gate is hidden by continue-on-error or a skip.

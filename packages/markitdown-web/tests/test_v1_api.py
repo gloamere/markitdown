@@ -8,6 +8,12 @@ from markitdown_web.app import create_app
 from markitdown_web.state import Settings
 
 
+def test_reviewed_launcher_path_is_startup_only(tmp_path, monkeypatch):
+    launcher = tmp_path / "reviewed-bwrap"
+    monkeypatch.setenv("MARKITDOWN_SANDBOX_BWRAP", str(launcher))
+    assert Settings(data_dir=tmp_path / "data").sandbox_bwrap == launcher
+
+
 def test_six_character_registration_api(web_app, admin, anonymous_client):
     invite = web_app.state.auth.create_invite(admin["id"])
     payload = {

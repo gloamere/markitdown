@@ -40,8 +40,8 @@ result inode remains writable. `/proc` is from the new PID namespace and remount
 read-only. `/dev` is bubblewrap's private minimal device set, not host `/dev`,
 and its filesystem is remounted read-only to prevent extra scratch files.
 
-The command always requests `--unshare-all --die-with-parent --disable-userns
---cap-drop ALL --clearenv`. It never uses `--share-net`, `--unshare-user-try`,
+The command always requests `--unshare-all --unshare-user --unshare-cgroup --die-with-parent
+--disable-userns --cap-drop ALL --clearenv`. It never uses `--share-net`, `--unshare-user-try`,
 `--not-a-security-boundary`, a host root mount, container socket, arbitrary client
 command, client mount, client environment or client model path. Bubblewrap's PID-1
 reaper remains enabled. All file descriptors other than standard null streams
@@ -142,7 +142,10 @@ Configure the service with a secure HTTPS origin and:
 
 - `deployment_mode=production`
 - `sandbox_runtime_root=/absolute/reviewed/runtime-root`
-- `sandbox_bwrap=/usr/bin/bwrap` (a reviewed distro package with required flags)
+- `sandbox_bwrap=/usr/bin/bwrap` by default; a reviewed distro package or the
+  approved, checksum-pinned non-setuid upstream build with all required flags.
+  `MARKITDOWN_SANDBOX_BWRAP` selects that trusted startup path; Web clients cannot
+  set it. The CI build installs only into runner temporary storage.
 - `sandbox_python=/usr/bin/python3`
 - `sandbox_docling_python=/opt/docling/bin/python`
 - Existing `docling_enabled` and checksum-pinned `docling_models` if enabling Docling
@@ -190,3 +193,36 @@ It returned exit 1: `bwrap: loopback: Failed to create NETLINK_ROUTE socket:
 Operation not permitted`. This was a read-only/existing-capability probe, not the
 production mount profile. No alternate namespace route, permission expansion,
 host security change or public deployment was attempted.
+
+
+## Transitional CI compatibility target
+
+The first exact-SHA CI run on Ubuntu 24.04 failed before application assertions:
+Bubblewrap reported `Failed RTM_NEWADDR: Operation not permitted`; Chromium with
+its sandbox enabled reported `No usable sandbox`. No protection was disabled.
+That runner is not positively validated as a production profile.
+
+A separately declared **transitional** `ubuntu-22.04` x64 job uses its default
+host security policy and reviewed upstream Bubblewrap 0.13.0. Jammy's distro 0.6.1
+lacks required `--size` and `--disable-userns` features. The selected upstream
+release is non-setuid, built without privilege into runner temp, using the official
+release asset SHA256 `4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765`
+and release commit `719a4fd474d44b26906bcf2b1b0fb6eddd8d56d0`.
+
+Every original protection is retained. Explicit `--unshare-user` and
+`--unshare-cgroup` additionally make those namespace requirements mandatory:
+upstream `--unshare-all` alone requests their try variants. A capability rejection
+still fails the job; no sysctl, AppArmor, capabilities, privileged container,
+unconfined option or sandbox-disabling flag is used. Selecting this declared test
+OS is not a claim that the failed Ubuntu 24.04 host was repaired or made safe.
+
+GitHub Ubuntu 22.04 deprecation started on 2026-09-17 and retirement is 2027-04-17.
+This is temporary validation infrastructure requiring migration, not the intended
+production operating-system decision. The actual deployment host remains unknown
+and unverified. Positive results, if obtained, apply only to the exact tested image,
+launcher digest and runner; physical capacity/TLS/production Docling remain distinct.
+
+Sources: [runner retirement](https://github.com/actions/runner-images/issues/14254),
+[Ubuntu namespace policy](https://ubuntu.com/blog/ubuntu-23-10-restricted-unprivileged-user-namespaces),
+[Jammy bwrap manual](https://manpages.ubuntu.com/manpages/jammy/man1/bwrap.1.html),
+[official pinned release](https://github.com/containers/bubblewrap/releases/tag/v0.13.0).

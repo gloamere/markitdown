@@ -8,9 +8,10 @@ ROOT="${RUNNER_TEMP:?Run only in an explicitly provisioned disposable CI runner}
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
 command -v docker >/dev/null
-command -v bwrap >/dev/null
+BWRAP="${MARKITDOWN_SANDBOX_BWRAP:-/usr/bin/bwrap}"
+test -x "$BWRAP"
 # Fail before expensive image work if existing namespace capability is denied.
-bwrap --unshare-all --die-with-parent --ro-bind /usr /usr \
+"$BWRAP" --unshare-all --unshare-user --unshare-cgroup --die-with-parent --ro-bind /usr /usr \
   --ro-bind /lib /lib --ro-bind /lib64 /lib64 --proc /proc --dev /dev /usr/bin/true
 
 # Resolve exact vendor version tags once, then build only from their immutable
