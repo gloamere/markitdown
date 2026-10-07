@@ -20,7 +20,11 @@ from markitdown_web import conversion, engines, sandbox
 
 
 @pytest.fixture
-def image_settings(tmp_path):
+def image_settings(tmp_path, monkeypatch):
+    # This fixture models command construction/path validation, not live kernel
+    # isolation. Keep it portable without changing Python's global platform.
+    tmp_path = tmp_path.resolve()
+    monkeypatch.setattr(sandbox, "sys", SimpleNamespace(platform="linux"))
     root = tmp_path / "image"
     root.mkdir()
     for name in ("input", "output", "code", "models", "tmp", "proc", "dev"):
@@ -39,10 +43,13 @@ def image_settings(tmp_path):
     python.chmod(0o700)
     data = tmp_path / "private"
     data.mkdir()
+    launcher = tmp_path / "synthetic-bwrap"
+    launcher.write_text("synthetic command-shape fixture; never launched")
+    launcher.chmod(0o700)
     return SimpleNamespace(
         deployment_mode="production",
         sandbox_runtime_root=root,
-        sandbox_bwrap=Path("/usr/bin/bwrap"),
+        sandbox_bwrap=launcher,
         sandbox_python="/usr/bin/python3",
         data_dir=data,
     )
@@ -112,6 +119,24 @@ def test_production_command_mounts_only_approved_paths(image_settings):
     assert len(ro) == 2 + len(sandbox.CODE_FILES)
     assert "OPENAI_API_KEY" not in env and "HTTPS_PROXY" not in env
     assert argv[argv.index("--size") + 1] == str(sandbox.TMP_BYTES)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_production_refuses_nonlinux_before_launch(
+    image_settings, monkeypatch, platform
+):
+    monkeypatch.setattr(sandbox, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(
+        conversion.subprocess,
+        "Popen",
+        lambda *a, **k: pytest.fail("unsupported production platform launched parser"),
+    )
+    source = image_settings.data_dir / "source.txt"
+    source.write_text("synthetic")
+    with pytest.raises(sandbox.SandboxUnavailable):
+        sandbox.runtime_paths(image_settings, "markitdown")
+    with pytest.raises(conversion.ConversionError, match="生产隔离"):
+        conversion.run_conversion(source, ".txt", settings=image_settings)
 
 
 @pytest.mark.parametrize(
