@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
 
+from .governance import GovernanceService
+
 if TYPE_CHECKING:
     from .state import Database, Settings
 
@@ -30,16 +32,17 @@ _CLEANUP_BATCH = 1000
 _MAX_SESSIONS_PER_USER = 20
 _MIB = 1024 * 1024
 _LOGIN_ERROR = "用户名或密码不正确"
-_INVITE_ERROR = "邀请码无效、已使用或已过期"
+_INVITE_ERROR = "邀请码无效，请检查后重试"
 
 
 class AuthError(Exception):
     """A safe error that the API can expose without internal exception details."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
+    def __init__(self, status_code: int, detail: str, code: str | None = None) -> None:
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+        self.code = code
 
 
 class AuthService:
@@ -103,6 +106,7 @@ class AuthService:
                     ON auth_attempts(attempted_at);
                 """
             )
+        self.governance = GovernanceService(db, settings)
 
     @staticmethod
     def _public_user(row: sqlite3.Row) -> dict[str, Any]:
@@ -133,7 +137,7 @@ class AuthService:
 
     @staticmethod
     def _valid_password(password: str) -> bool:
-        if not isinstance(password, str) or not 12 <= len(password) <= 128:
+        if not isinstance(password, str) or not 6 <= len(password) <= 128:
             return False
         try:
             return len(password.encode("utf-8")) <= 512
@@ -239,26 +243,32 @@ class AuthService:
             ).fetchone()
             return None if row is None else self._public_user(row)
 
-    def bootstrap_admin(self, username: str, password: str) -> dict[str, Any]:
+    def bootstrap_admin(
+        self, username: str, password: str, *, request_id: str | None = None
+    ) -> dict[str, Any]:
         normalized = self._normalized_username(username)
         if normalized is None:
             raise AuthError(400, "用户名须为 3–32 位英文字母、数字、下划线、点或连字符")
         if not self._valid_password(password):
-            raise AuthError(400, "密码须为 12–128 个字符，且不超过 512 UTF-8 字节")
+            raise AuthError(400, "密码须为 6–128 个字符，且不超过 512 UTF-8 字节")
         if self.has_admin():
             raise AuthError(409, "管理员已初始化")
-        self._check_limits(
-            self.settings.default_daily_quota, self.settings.default_max_file_bytes
-        )
         password_hash = self._passwords.hash(password)
         user_id = uuid.uuid4().hex
         try:
-            with self.db.transaction() as connection:
+            with self.governance.mutation(
+                "local-operator",
+                "account.bootstrap",
+                "user",
+                user_id,
+                request_id=request_id,
+            ) as (connection, audit):
                 # The final check and insert are serialized across processes.
                 if connection.execute(
                     "SELECT 1 FROM users WHERE is_admin = 1 LIMIT 1"
                 ).fetchone():
                     raise AuthError(409, "管理员已初始化")
+                defaults = self.governance.current(connection)
                 connection.execute(
                     "INSERT INTO users(id, username, password_hash, is_admin, "
                     "is_active, daily_quota, max_file_bytes, created_at) "
@@ -267,55 +277,82 @@ class AuthService:
                         user_id,
                         normalized,
                         password_hash,
-                        self.settings.default_daily_quota,
-                        self.settings.default_max_file_bytes,
+                        defaults["default_daily_quota"],
+                        max(_MIB, defaults["default_max_file_bytes"]),
                         time.time(),
                     ),
                 )
                 row = connection.execute(
                     "SELECT * FROM users WHERE id = ?", (user_id,)
                 ).fetchone()
+                audit.after = self._public_user(row)
                 return self._public_user(row)
         except sqlite3.IntegrityError:
             raise AuthError(400, "无法使用该用户名") from None
 
+    @staticmethod
+    def _invite_status(invite: sqlite3.Row, now: float) -> str:
+        if invite["used_at"] is not None:
+            return "used"
+        if invite["revoked_at"] is not None:
+            return "revoked"
+        if invite["expires_at"] <= now:
+            return "expired"
+        return "active"
+
+    def _require_invite(
+        self, connection: sqlite3.Connection, token_hash: str, now: float
+    ) -> sqlite3.Row:
+        invite = connection.execute(
+            "SELECT * FROM invites WHERE token_hash = ?", (token_hash,)
+        ).fetchone()
+        if invite is None:
+            raise AuthError(400, _INVITE_ERROR, "invite_invalid")
+        status = self._invite_status(invite, now)
+        messages = {
+            "used": "邀请码已使用，请联系管理员获取新的邀请码",
+            "revoked": "邀请码已撤销，请联系管理员获取新的邀请码",
+            "expired": "邀请码已过期，请联系管理员获取新的邀请码",
+        }
+        if status != "active":
+            raise AuthError(400, messages[status], f"invite_{status}")
+        return invite
+
     def register(
-        self, username: str, password: str, invite_token: str, ip: str
+        self,
+        username: str,
+        password: str,
+        invite_token: str,
+        ip: str,
+        *,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         normalized = self._normalized_username(username)
         attempt_id = self._start_attempt(normalized, ip)
         if normalized is None:
             raise AuthError(400, "用户名须为 3–32 位英文字母、数字、下划线、点或连字符")
         if not self._valid_password(password):
-            raise AuthError(400, "密码须为 12–128 个字符，且不超过 512 UTF-8 字节")
+            raise AuthError(400, "密码须为 6–128 个字符，且不超过 512 UTF-8 字节")
         if not self._valid_token(invite_token):
-            raise AuthError(400, _INVITE_ERROR)
+            raise AuthError(400, _INVITE_ERROR, "invite_invalid")
         token_hash = self._token_hash(invite_token)
         with self.db.connect() as connection:
-            invite = connection.execute(
-                "SELECT id FROM invites WHERE token_hash = ? "
-                "AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
-                (token_hash, time.time()),
-            ).fetchone()
-        if invite is None:
-            raise AuthError(400, _INVITE_ERROR)
-        self._check_limits(
-            self.settings.default_daily_quota, self.settings.default_max_file_bytes
-        )
+            self._require_invite(connection, token_hash, time.time())
         password_hash = self._passwords.hash(password)
         user_id = uuid.uuid4().hex
         try:
-            with self.db.transaction() as connection:
+            with self.governance.mutation(
+                user_id,
+                "account.register",
+                "user",
+                user_id,
+                request_id=request_id,
+            ) as (connection, audit):
                 now = time.time()
                 # Recheck after hashing and acquire the invite in the same
                 # transaction as user creation. Duplicate usernames roll it back.
-                invite = connection.execute(
-                    "SELECT id FROM invites WHERE token_hash = ? "
-                    "AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?",
-                    (token_hash, now),
-                ).fetchone()
-                if invite is None:
-                    raise AuthError(400, _INVITE_ERROR)
+                invite = self._require_invite(connection, token_hash, now)
+                defaults = self.governance.current(connection)
                 connection.execute(
                     "INSERT INTO users(id, username, password_hash, is_admin, "
                     "is_active, daily_quota, max_file_bytes, created_at) "
@@ -324,8 +361,8 @@ class AuthService:
                         user_id,
                         normalized,
                         password_hash,
-                        self.settings.default_daily_quota,
-                        self.settings.default_max_file_bytes,
+                        defaults["default_daily_quota"],
+                        max(_MIB, defaults["default_max_file_bytes"]),
                         now,
                     ),
                 )
@@ -339,6 +376,7 @@ class AuthService:
                 row = connection.execute(
                     "SELECT * FROM users WHERE id = ?", (user_id,)
                 ).fetchone()
+                audit.after = self._public_user(row)
                 return self._public_user(row)
         except sqlite3.IntegrityError:
             raise AuthError(400, "无法使用该用户名") from None
@@ -442,15 +480,25 @@ class AuthService:
             )
 
     def create_invite(
-        self, admin_user_id: str, ttl_seconds: int | None = None
+        self,
+        admin_user_id: str,
+        ttl_seconds: int | None = None,
+        *,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         ttl = self.settings.invite_seconds if ttl_seconds is None else ttl_seconds
-        if type(ttl) is not int or not 1 <= ttl <= 7 * 24 * 60 * 60:
-            raise AuthError(400, "邀请码有效期须为 1 秒至 7 天")
         raw_token = secrets.token_urlsafe(32)
         invite_id = uuid.uuid4().hex
-        with self.db.transaction() as connection:
+        with self.governance.mutation(
+            admin_user_id,
+            "invite.create",
+            "invite",
+            invite_id,
+            request_id=request_id,
+        ) as (connection, audit):
             self._require_admin(connection, admin_user_id)
+            if type(ttl) is not int or not 1 <= ttl <= 7 * 24 * 60 * 60:
+                raise AuthError(400, "邀请码有效期须为 1 秒至 7 天")
             now = time.time()
             expires_at = now + ttl
             connection.execute(
@@ -464,6 +512,11 @@ class AuthService:
                     expires_at,
                 ),
             )
+            audit.after = {
+                "status": "active",
+                "created_at": now,
+                "expires_at": expires_at,
+            }
         # The raw invite is intentionally available only at creation time.
         return {"id": invite_id, "token": raw_token, "expires_at": expires_at}
 
@@ -478,30 +531,42 @@ class AuthService:
         result = []
         for row in rows:
             invite = dict(row)
-            invite["status"] = (
-                "used"
-                if row["used_at"] is not None
-                else "revoked"
-                if row["revoked_at"] is not None
-                else "expired"
-                if row["expires_at"] <= now
-                else "active"
-            )
+            invite["status"] = self._invite_status(row, now)
             result.append(invite)
         return result
 
-    def revoke_invite(self, admin_user_id: str, invite_id: str) -> None:
-        with self.db.transaction() as connection:
+    def revoke_invite(
+        self, admin_user_id: str, invite_id: str, *, request_id: str | None = None
+    ) -> None:
+        with self.governance.mutation(
+            admin_user_id,
+            "invite.revoke",
+            "invite",
+            invite_id,
+            request_id=request_id,
+        ) as (connection, audit):
             self._require_admin(connection, admin_user_id)
             if not self._valid_id(invite_id):
                 raise AuthError(404, "未找到邀请码")
-            cursor = connection.execute(
-                "UPDATE invites SET revoked_at = COALESCE(revoked_at, ?) "
-                "WHERE id = ?",
-                (time.time(), invite_id),
-            )
-            if cursor.rowcount != 1:
+            invite = connection.execute(
+                "SELECT * FROM invites WHERE id = ?", (invite_id,)
+            ).fetchone()
+            if invite is None:
                 raise AuthError(404, "未找到邀请码")
+            now = time.time()
+            audit.before = {
+                "status": self._invite_status(invite, now),
+                "revoked_at": invite["revoked_at"],
+            }
+            # Used, expired, and previously revoked invitations are already
+            # unusable. Preserve that state instead of relabeling old events.
+            if audit.before["status"] == "active":
+                connection.execute(
+                    "UPDATE invites SET revoked_at = ? WHERE id = ?", (now, invite_id)
+                )
+                audit.after = {"status": "revoked", "revoked_at": now}
+            else:
+                audit.after = dict(audit.before)
 
     def list_users(self, admin_user_id: str) -> list[dict[str, Any]]:
         with self.db.connect() as connection:
@@ -521,12 +586,24 @@ class AuthService:
         daily_quota: int | None = None,
         max_file_bytes: int | None = None,
         is_active: bool | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
-        self._check_limits(daily_quota, max_file_bytes)
-        if is_active is not None and type(is_active) is not bool:
-            raise AuthError(400, "账户状态须为布尔值")
-        with self.db.transaction() as connection:
+        with self.governance.mutation(
+            admin_user_id,
+            "user.update",
+            "user",
+            target_id,
+            request_id=request_id,
+        ) as (connection, audit):
             self._require_admin(connection, admin_user_id)
+            self._check_limits(daily_quota, max_file_bytes)
+            if (
+                max_file_bytes is not None
+                and max_file_bytes > self.settings.max_file_bytes
+            ):
+                raise AuthError(400, "单文件大小不能超过部署上限")
+            if is_active is not None and type(is_active) is not bool:
+                raise AuthError(400, "账户状态须为布尔值")
             target = None
             if self._valid_id(target_id):
                 target = connection.execute(
@@ -534,6 +611,7 @@ class AuthService:
                 ).fetchone()
             if target is None:
                 raise AuthError(404, "未找到账户")
+            audit.before = self._public_user(target)
             if is_active is False:
                 if target_id == admin_user_id:
                     raise AuthError(400, "不能停用自己的管理员账户")
@@ -557,10 +635,53 @@ class AuthService:
                 ),
             )
             if is_active is False:
-                connection.execute(
+                removed = connection.execute(
                     "DELETE FROM sessions WHERE user_id = ?", (target_id,)
-                )
+                ).rowcount
+            else:
+                removed = 0
+            if is_active is not None:
+                self.governance.record_account_state(connection, target_id, is_active)
             row = connection.execute(
                 "SELECT * FROM users WHERE id = ?", (target_id,)
             ).fetchone()
+            audit.after = {**self._public_user(row), "sessions_revoked": removed}
             return self._public_user(row)
+
+    def reset_password(
+        self, username: str, password: str, *, request_id: str | None = None
+    ) -> dict[str, Any]:
+        """Local-operator recovery only. Never expose this method as a web route.
+
+        The CLI must obtain the new password using an interactive, hidden prompt.
+        Existing accounts and disabled status are preserved; all sessions expire.
+        """
+        normalized = self._normalized_username(username)
+        with self.governance.mutation(
+            "local-operator", "account.recover", "user", request_id=request_id
+        ) as (connection, audit):
+            if normalized is None:
+                raise AuthError(400, "用户名须为 3–32 位英文字母、数字、下划线、点或连字符")
+            target = connection.execute(
+                "SELECT * FROM users WHERE username = ?", (normalized,)
+            ).fetchone()
+            if target is None:
+                raise AuthError(404, "未找到账户")
+            audit.target_id = target["id"]
+            audit.before = {"is_active": bool(target["is_active"])}
+            if not self._valid_password(password):
+                raise AuthError(400, "密码须为 6–128 个字符，且不超过 512 UTF-8 字节")
+            password_hash = self._passwords.hash(password)
+            connection.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, target["id"]),
+            )
+            removed = connection.execute(
+                "DELETE FROM sessions WHERE user_id = ?", (target["id"],)
+            ).rowcount
+            audit.after = {
+                "is_active": bool(target["is_active"]),
+                "password_changed": True,
+                "sessions_revoked": removed,
+            }
+            return self._public_user(target)
