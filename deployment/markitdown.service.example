@@ -1,0 +1,28 @@
+# Template only. Creating users, security settings and installing/enabling units
+# require the operator's separate authorization and target-host verification.
+[Unit]
+Description=MarkItDown invitation-only workspace
+After=network.target
+
+[Service]
+Type=simple
+User=markitdown
+Group=markitdown
+WorkingDirectory=/opt/markitdown/app
+EnvironmentFile=/etc/markitdown/service.env
+ExecStart=/opt/markitdown/app/.venv/bin/markitdown-web serve --port 8765
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=100
+KillMode=control-group
+# Service-wide backstop; validate limits against actual host/runtime profile.
+MemoryMax=6G
+TasksMax=96
+LimitNOFILE=1024
+LimitCORE=0
+# Do not add RestrictNamespaces or a conflicting syscall filter without proving
+# the mandatory parser namespace profile still launches. It must fail closed.
+
+[Install]
+WantedBy=multi-user.target
