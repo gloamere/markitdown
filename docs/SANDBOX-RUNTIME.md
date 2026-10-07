@@ -1,7 +1,7 @@
 # Linux production parser boundary (v1 implementation; deployment gate open)
 
-This is a **deployment contract and unbuilt image recipe**, not evidence that the
-service is ready for public use. The 2026-10-07 authorized cloud verification could
+This is a **deployment contract and image recipe with open runtime gates**, not
+evidence that the service is ready for public use. The 2026-10-07 authorized cloud verification could
 run application/local conversion tests, native seccomp tests and cancellation
 checks. The production namespace launch was blocked by that environment's
 existing security policy. No host settings were changed or relaxed.
@@ -105,7 +105,9 @@ operator deployment control; never change host limits merely to make tests pass.
 ## Provision an image (separate approved operator work)
 
 `deployment/runtime.Dockerfile` is a recipe targeting Linux x86_64 / Python 3.12.14.
-It has not been built or positively tested in this restricted cloud environment.
+It was built in the separately authorized Ubuntu 22.04 CI job on ae05471. That
+run rejected Docker export mount scaffolding before parser launch; a successful
+build alone is not a passed isolation or conversion gate.
 Provide immutable digests for the official Python 3.12.14 slim-bookworm image and
 uv 0.12.19 image. No credentials should be included in build arguments or context.
 Pin/review the apt package snapshot as part of release packaging; upstream apt
@@ -124,7 +126,18 @@ review it for keys, tokens, caches, documents, account state and unexpected moun
 A root filesystem copied from the host, `/usr`, a virtualenv or a home is forbidden.
 Runtime image contents are trusted deployment artifacts, not arbitrary user input.
 
-Add `/markitdown-runtime.json` inside the exported root:
+Docker adds `/dev/pts`, `/dev/shm` and `/dev/console` when creating even a stopped
+container. These are packaging scaffolds, not allowed persistent runtime state.
+The CI-only `scripts/ci/prepare_runtime_export.py` reserves a fresh export root
+before extraction, binds a one-shot marker to its inode/device and source image
+ID, then removes only ephemeral `tmp/proc/dev` entries with no-follow traversal.
+It refuses symlinked roots/targets, preexisting application state, a mismatched
+identity or a second preparation. It is never called by the service or used to
+repair an existing deployment. Diagnostics contain fixed target labels and counts
+only. The application still rejects every nonempty mount target.
+
+After an independently reviewed operator export, add `/markitdown-runtime.json`
+inside the exported root (the confined CI preparer does this for its own export):
 
 ```json
 {"profile":"linux-bwrap-v1","image_id":"sha256:<64 lowercase hexadecimal characters>"}

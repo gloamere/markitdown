@@ -652,10 +652,20 @@ async def exercise(
             )
             require(
                 await user.locator(
-                    "#markdown-preview script, #markdown-preview img, #markdown-preview a"
+                    "#markdown-preview script, #markdown-preview img, "
+                    "#markdown-preview a[href], #markdown-preview iframe, "
+                    "#markdown-preview object, #markdown-preview embed"
                 ).count()
                 == 0,
                 "Unsafe active preview content",
+            )
+            # The sanitizer preserves inert <a> text but removes every attribute,
+            # including href. Reject any attribute rather than harmless anchors.
+            require(
+                await user.locator("#markdown-preview *").evaluate_all(
+                    "nodes => nodes.every(node => node.getAttributeNames().length === 0)"
+                ),
+                "Preview retained an attribute",
             )
             await evidence.screenshot(user, "desktop-preview")
             check["details"] = {

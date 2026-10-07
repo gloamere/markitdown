@@ -34,14 +34,17 @@ real user feedback, hard RSS guarantee or production-isolation result is inferre
 
 1. Existing cloud bwrap probe fails NETLINK_ROUTE socket Operation not permitted.
    Required production profile stays unavailable, no fallback or permission changes.
-2. Production image recipe has not been built here; positive per-job isolation,
-   intended-host hard physical-memory/capacity and production Docling checks remain.
+2. The production image built on transitional Ubuntu 22.04 CI, but its exported
+   Docker mount scaffolding failed the strict empty-target check before parser
+   launch. Positive per-job isolation, intended-host hard physical-memory/capacity
+   and production Docling checks remain.
 3. Actual browser rendering/clipboard/download/mobile checks are a separate gate.
    This cloud Chromium also failed socket creation; no security bypass was used.
 4. The repository owner has now enabled GitHub Actions (verified 2026-10-07).
    Run 37576232027 on 6c3d2db completed: 22 of 24 jobs passed. Browser sandbox launch
    and host namespace preflight failed. Pre-commit passed. A declared transitional
-   Ubuntu 22.04 compatibility target now awaits its own exact-commit results.
+   Ubuntu 22.04 run 37577626878 on ae05471 also completed with 22/24 jobs passing.
+   Both prior capability barriers cleared; details of the two test failures follow.
 5. nginx/systemd are templates; actual TLS/proxy/target host need separate approved
    staging/rollout work. Production deployment itself is outside this code task.
 
@@ -83,3 +86,36 @@ On 6c3d2db, hosted Web CI passed 505 tests with 1 explicit production test skipp
 regressions (1 URL test excluded). All core Python/OCR/MCP matrix jobs passed.
 The two capability failures occurred before image construction or real browser
 flows. No failed gate is hidden by continue-on-error or a skip.
+
+## Transitional CI result and bounded corrections
+
+On ae0547116c05ef15d2a4777dfcb164f65519ba39, run 37577626878 built the verified
+non-setuid Bubblewrap 0.13.0 and the runtime image; the strict host namespace
+preflight passed. Its application test stopped at exported-root layout validation
+(43 sandbox unit checks passed, one positive check failed before parser launch).
+Docker's stopped-container init layer supplies nonempty `/dev` scaffolding. The
+next packaging correction prepares only its fresh, source-identified CI export;
+the service's empty/nonsymlink target guard remains unchanged.
+
+Chromium's original sandbox launched successfully on the same declared runner
+target. Admin login, keyboard navigation and six-character invitation signup
+passed. The next assertion incorrectly rejected harmless attribute-free anchors
+in the sanitized preview. The harness now checks active links and rejects every
+attribute while retaining the no-script/image/frame/object/embed assertions. No
+application sanitization or Chromium sandbox setting changed. Remaining browser
+steps were not reached in that run.
+
+All 21 inherited core/OCR/MCP jobs and Web CI passed on ae05471. Web reported 506
+passed / 1 explicit production skip, 7/7 generated format checks, 9 browser-harness
+self-checks, 8 installer tests, 202 offline regressions / 1 URL exclusion and 59 DOM
+scenarios. Pre-commit passed. The two bounded corrections require a new exact-SHA
+run. CI publishes content-free test summaries only; screenshot/download/output
+artifacts are not uploaded.
+
+The export/preview corrections also passed the full cloud aggregate before their
+checkpoint push: 546 Web tests / 1 explicit live-production skip, 7/7 synthetic
+formats, 9 harness self-checks, 8 installer tests, 202 offline regressions / 1 URL
+exclusion, 59 DOM scenarios, lint/format/types/syntax. A separate read-only review
+found no concrete blocker in the trusted fresh-export flow; concurrent hostile
+same-UID mutation and same-device bind mounts are outside that disposable build
+workspace's trust assumptions. Live Docker/export/isolation results are pending.

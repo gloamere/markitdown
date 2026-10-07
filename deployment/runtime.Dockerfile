@@ -37,10 +37,16 @@ RUN python3 -m venv --copies /opt/docling \
 # Only approved code and exact model files are later bound by the runner.
 # No model download, account database, home, key, token, input or service code
 # is copied into this image. Preserve installed package license metadata.
-RUN rm -rf /build /root/.cache /root/.local /tmp/* /usr/local/bin/uv \
+RUN python3 -c 'import importlib.metadata as m; assert m.version("markitdown"); import onnxruntime; onnxruntime.disable_telemetry_events()' \
+ && /opt/docling/bin/python -c 'import importlib.metadata as m; assert m.version("docling-slim")=="2.133.0"; assert m.version("docling-core")=="2.99.0"' \
+ && rm -rf /build /root/.cache /root/.local /usr/local/bin/uv \
+ && find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + \
  && mkdir -p /input /output /code /models /tmp /proc /dev \
- && python3 -c 'import importlib.metadata as m; assert m.version("markitdown"); import onnxruntime; onnxruntime.disable_telemetry_events()' \
- && /opt/docling/bin/python -c 'import importlib.metadata as m; assert m.version("docling-slim")=="2.133.0"; assert m.version("docling-core")=="2.99.0"'
+ && chmod 1777 /tmp
+# Cleanup follows all smoke imports and includes hidden temporary entries.
+# Docker create adds its own /dev init-layer scaffolding AFTER this build.
+# The CI export preparer removes only fixed ephemeral targets from its fresh,
+# trusted export; the application's strict empty/nonsymlink guard is unchanged.
 # Export the stopped image filesystem; do not run a container per conversion.
 # The operator adds markitdown-runtime.json to the exported root after recording
 # the immutable image ID. See docs/SANDBOX-RUNTIME.md for gates and limitations.

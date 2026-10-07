@@ -4,9 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 PYTHON="${PYTHON:-.venv/bin/python}"
-ROOT="${RUNNER_TEMP:?Run only in an explicitly provisioned disposable CI runner}/markitdown-production"
-mkdir -p "$ROOT"
-chmod 700 "$ROOT"
+ROOT=$(mktemp -d "${RUNNER_TEMP:?Run only in an explicitly provisioned disposable CI runner}/markitdown-production.XXXXXXXX")
 command -v docker >/dev/null
 BWRAP="${MARKITDOWN_SANDBOX_BWRAP:-/usr/bin/bwrap}"
 test -x "$BWRAP"
@@ -37,19 +35,19 @@ docker build --pull=false --platform linux/amd64 \
 IMAGE=$(docker image inspect "markitdown-runtime:${GITHUB_RUN_ID:-synthetic}" --format '{{.Id}}')
 CONTAINER=$(docker create "$IMAGE" /bin/true)
 trap 'docker rm "$CONTAINER" >/dev/null 2>&1 || true' EXIT
+test "$(docker container inspect "$CONTAINER" --format '{{.Image}}')" = "$IMAGE"
 docker export "$CONTAINER" > "$ROOT/runtime.tar"
-mkdir "$ROOT/runtime-root"
+"$PYTHON" scripts/ci/prepare_runtime_export.py initialize --workspace "$ROOT" --image-id "$IMAGE"
 # This is an export of the just-built pinned official image, never user input.
 tar --extract --file "$ROOT/runtime.tar" --directory "$ROOT/runtime-root" --no-same-owner
 rm "$ROOT/runtime.tar"
 docker rm "$CONTAINER" >/dev/null
 trap - EXIT
-"$PYTHON" - "$ROOT/runtime-root" "$IMAGE" <<'PY'
-import json, pathlib, re, sys
-root = pathlib.Path(sys.argv[1]); image = sys.argv[2]
-assert re.fullmatch(r'sha256:[a-f0-9]{64}', image)
-(root / 'markitdown-runtime.json').write_text(json.dumps({'profile':'linux-bwrap-v1','image_id':image}))
-PY
+# Canonicalize this one-shot trusted export, not host directories or arbitrary
+# user state. Docker init-layer mount scaffolding is not part of our runtime.
+# Preparation retains source-image identity and emits content-free per-target
+# evidence. A symlink or application state is a failure, never repaired away.
+"$PYTHON" scripts/ci/prepare_runtime_export.py prepare --workspace "$ROOT" --image-id "$IMAGE"
 # Required opt-in test: once configured, denial is failure, never a skip.
 MARKITDOWN_TEST_RUNTIME_ROOT="$ROOT/runtime-root" \
   "$PYTHON" -m pytest -q packages/markitdown-web/tests/test_sandbox_contract.py
@@ -58,13 +56,13 @@ MARKITDOWN_TEST_RUNTIME_ROOT="$ROOT/runtime-root" \
   --output "$ROOT/standard-runtime.json"
 # This job proves only its actual checks. Dedicated target-host capacity, TLS and
 # optional Docling production model acceptance remain separately visible gates.
-cat "$ROOT/base-images.json" "$ROOT/standard-runtime.json"
+cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
     echo '### Production sandbox CI evidence'
     echo 'Executed fixed namespace/isolation tests and real standard conversions.'
     echo 'No kernel/security settings changed; no privileged containers or secrets used.'
     echo 'Target-host capacity/TLS and production Docling remain separate gates.'
-    echo '```json'; cat "$ROOT/base-images.json" "$ROOT/standard-runtime.json"; echo '```'
+    echo '```json'; cat "$ROOT/base-images.json" "$ROOT/runtime-preparation.json" "$ROOT/standard-runtime.json"; echo '```'
   } >> "$GITHUB_STEP_SUMMARY"
 fi
