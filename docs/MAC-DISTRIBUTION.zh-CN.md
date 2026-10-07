@@ -17,7 +17,8 @@ Installer。[Apple 证书说明](https://developer.apple.com/help/account/certif
 
 Xcode 的非免费团队缓存不能证明当前会员有效期。需要操作者在
 [Apple Developer 账户](https://developer.apple.com/account/)确认对应团队的
-会员状态，或用已授权的 notarytool 配置验证在线公证服务访问。
+会员状态和续费日期。已授权的 notarytool 配置可以验证公证服务访问，
+但不能代替账户页面的会员期限核实。
 如果会员不存在，再选择个人或组织报名：个人需要有效的 Apple Account、
 双重认证与身份核验；组织还需法律实体、D-U-N-S 和签约权限。
 会员年费为 99 USD，地区价格以 Apple 结算为准；报名、协议和付款由
@@ -48,20 +49,55 @@ deep/strict 验证和预期签名者检查。任一必要检查失败时构建�
 
 ## 公证认证准备
 
-如果已有配置，只需要把 `notarytool` 的 profile name 提供给工程流程；
-不要发送 Apple 密码、应用专用密码、API 私钥或验证码。
-如果配置缺少，操作者在自己的交互式终端执行：
+先完成账户核实，再准备认证，最后单独确认上传具体产物。
+这三个步骤不会由签名构建自动触发。
+
+1. 使用已授权的浏览器访问
+   [Apple Developer 账户](https://developer.apple.com/account/)。优先复用
+   已打开的官方账户页面，不操作其他标签或重启浏览器。如果页面要求登录，
+   将控制交给操作者，由其输入 Apple Account、密码和双重认证；完成后只需
+   告知“登录完成”，不在聊天中发送任何认证信息。
+2. 工程流程在恢复浏览器访问后只读查看 Membership details，核对
+   Team ID **NRUX9D4Z3Z**、会员状态、角色和续费日期。该 Team ID 来自本次
+   已实际签名的公开证书，不需要操作者猜测团队。如果页面未显示该团队，
+   或工具无法读取页面，继续记录为未核实，先处理账户访问问题。
+   [Apple 对账户页面字段的说明](https://developer.apple.com/help/account/basics/account-landing-page/)
+3. 如果操作者已有公证配置，只提供 profile name；工程流程用该名称验证
+   服务访问，不读取凭据内容。本次项目配置、`APPLE_KEYCHAIN_PROFILE`
+   以及默认查询范围内的 `markitdown-notary` 元数据均未找到配置；这不证明
+   其他名称或其他钥匙串没有配置。
+4. 确认需要新建配置后，操作者自行登录
+   [Apple Account](https://account.apple.com/)，进入“登录与安全性 / Sign-In
+   and Security” → “应用专用密码 / App-Specific Passwords” → “生成 / Generate”。
+   可用名称 `MarkItDown notarization`。生成需要双重认证；操作者自行处理
+   账户验证和生成的秘密，不把页面内容或密码交给工程流程。
+   [Apple 应用专用密码步骤](https://support.apple.com/en-us/102654)
+5. 操作者确认保存到本机钥匙串后，在自己的交互式终端执行下列命令，
+   将占位邮箱换为刚核实团队所用的 Apple Account。工程流程不会代为执行。
 
 ```sh
-xcrun notarytool store-credentials "markitdown-notary"
+xcrun notarytool store-credentials "markitdown-notary" \
+  --apple-id 'YOUR_APPLE_ACCOUNT_EMAIL' \
+  --team-id NRUX9D4Z3Z
 ```
 
-该命令会交互式询问账户、团队和认证信息，默认向 Apple 验证后写入钥匙串。
-使用与签名团队一致的 Apple Account。不要使用 `--password` 参数或把
-凭据放入聊天、shell 历史、仓库或普通文档。此步骤尚未由本项目代为执行。
+命令会在安全终端提示中询问**应用专用密码**，默认向 Apple 验证后写入
+钥匙串；没有 `--password` 参数，因此密码不进入命令行或 shell 历史。
+不要使用 Apple Account 登录密码，也不要添加 `--no-validate`。如果该名称
+已经存在，命令会更新它；先确认它属于本项目，避免覆盖其他用途的配置。
+完成后只回复 profile name 和“验证并保存成功”。不发送密码、API 私钥或
+验证码，不把凭据写入仓库、普通文档或截图。本次没有生成或保存任何凭据。
 
-获得授权的配置后，先只读验证服务访问，再提交签名 DMG，等待 Accepted，
-对产物 staple/validate，重新检查 Gatekeeper 和下载包。未收到 Accepted
+工程流程获得该名称及只读验证授权后，可以使用
+`xcrun notarytool history --keychain-profile "markitdown-notary"` 验证服务访问。
+成功后，再让操作者确认将以下**已有签名 DMG**上传 Apple 公证服务：
+
+- 路径：`packages/markitdown-desktop/dist/developer-id/MarkItDown-1.1.0-dev.1-mac-arm64-developer-id-unnotarized.dmg`
+- 本次上传前字节数：`127127799`
+- 本次上传前 SHA256：`27f4265e64a6066e15adf626be3d5c2872f86e410f8bddc2da6c8480737f91a7`
+
+上传授权与认证条件都明确后才提交，等待 Accepted，对产物 staple/validate，
+重新检查 Gatekeeper 和下载包。未收到 Accepted
 不能宣称已公证；staple 改变字节后必须重新生成大小与 SHA256。
 [Apple Developer ID 分发说明](https://developer.apple.com/developer-id/)
 
@@ -105,9 +141,17 @@ Gatekeeper 明确返回 `Unnotarized Developer ID` 并拒绝分发验收。
 拒绝继续，阻止启动的预期测试通过；原始产物和系统策略没有修改。
 在线会员状态与可用 notarytool 配置仍未核实，公证没有提交，正式安装
 验收没有通过。只读元数据查询未定位到可用的现有公证 profile；这不证明
-其他钥匙串或其他名称的配置不存在。操作者提供 profile name 后可继续。
+其他钥匙串或其他名称的配置不存在。
+
+本次读取本机已有官方账户页面的 Chrome AppleEvent 查询超时（`-1712`）；
+当前执行环境没有可用的浏览器控制/登录交接工具，也没有发现现成的 Chrome
+调试端口。因此登录状态仍是未知，没有把工具失败判断成“账户未登录”。
+需通过可用的授权浏览器工具完成上面的登录交接与会员读取；若工具仍
+不可用，先恢复授权访问。没有重启用户 Chrome、开启调试或更改浏览器/系统
+安全设置，也没有读取 cookies、账户令牌、密码、私钥或转储钥匙串。
 
 本地证据与实际截图位于 `docs/evidence/desktop-ui/mac-signed-package/`；
 其中 `mac-package-evidence.json` 记录实际 DMG 大小/SHA256、签名及
 Gatekeeper 的独立状态。Web 适用检查仍为 657 通过/8 条件跳过，
 7/7 合成格式、60 DOM 状态场景及其他项目检查通过。
+`auth-handoff.json` 记录后续只读认证检查范围及浏览器交接阻塞。
