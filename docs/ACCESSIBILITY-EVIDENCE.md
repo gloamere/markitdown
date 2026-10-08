@@ -159,3 +159,15 @@ versions do not cover this change.
 
 Security, request-deadline, identity/epoch, idempotency, ownership, CSRF, parser,
 corpus, dependency, workflow, and build-evidence boundaries are unchanged.
+
+## Exact-commit CI update
+
+Application commit `98938961e9adf7234a11a610251f63db4faf5ee8` subsequently passed
+all three workflows. The sandbox-enabled Chromium run passed all 13 scenarios,
+including the new keyboard journey. Mac source and assembled-app smoke runs
+passed both setup and workspace 200% renderer-zoom probes; Windows passed the
+setup probe. See [the consolidated acceptance record](ROADMAP-ACCEPTANCE.zh-CN.md)
+for exact workflow links and remaining manual/native/downstream gates. These CI
+results supersede only the automated execution gate, not visual or assistive-
+technology acceptance. The earlier cloud-local launch blockers remain accurately
+recorded above.
