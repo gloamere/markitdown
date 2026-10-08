@@ -20,15 +20,33 @@ missing historical versions remain unknown. It does not assert extraction qualit
 
 ## Reproducible small evaluation
 
-Run `scripts/evaluate_web.py` with the web test Python. It generates all inputs
-locally (TXT/MD/CSV/JSON/DOCX/XLSX/PDF), runs actual conversion subprocesses and
-checks explicitly listed text/number/unit facts. Every failure stays in the report.
-Source hashes, engine/library versions, output hashes and elapsed time are recorded.
-The seven samples are engineering checks, not independent annotations, a user
-study, a capacity estimate or a general accuracy benchmark.
+Run `scripts/evaluate_web.py` with the web test Python. The versioned
+`synthetic-export-v1` corpus keeps the original seven generated format samples
+(TXT/MD/CSV/JSON/DOCX/XLSX/PDF) and their required facts, then adds structured
+Unicode/escaped-code Markdown, an empty PDF, and two malformed documents.
+Office ZIP metadata and core-property dates are normalized after generation;
+reviewed input hashes catch generator/dependency drift. Tests vary the actual
+pre-normalization ZIP/core clocks and source-file modification times.
 
-Generated synthetic Markdown and its measured report are retained separately
-for the owner; raw input/output artifacts are not published to this repository. Actual GitHub web/Obsidian consumer acceptance must be
+The evaluator runs actual conversion subprocesses. Expected successful, empty,
+and rejected outcomes are explicit: a timeout, crash, missing dependency or
+generic conversion failure never counts as an expected empty/rejected result.
+Every case and failure stays in the report. Source commit/tree/code hashes,
+corpus version, installed library versions, executed worker versions, input/output
+hashes and elapsed time are recorded. These author-generated examples are
+engineering checks, not independent annotations, a user study, a capacity
+estimate or a general accuracy benchmark.
+
+Add `--api-handoff` to verify the real authenticated upload, queue, worker and
+download routes. It compares individual MD responses and Markdown-only ZIP
+members against job content and separately downloaded JSON manifests, including
+source/output SHA-256 identities, attempts, duplicate names and long Unicode
+names that truncate to the same suggestion. This does not change the ZIP format
+or prove native consumer rendering. See [the corpus runbook](EXPORT-CORPUS.md).
+
+Generated synthetic inputs, Markdown, ZIPs, JSON manifests and measured reports
+are retained locally in ignored directories; raw input/output artifacts are not
+published to this repository. Actual GitHub web/Obsidian consumer acceptance must be
 recorded separately with target/version/date and observed checks. A local preview
 or known Markdown syntax alone is not proof those applications opened the output.
 Obsidian is not installed or driven automatically by this repository.

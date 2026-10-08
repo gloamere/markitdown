@@ -9,7 +9,10 @@ export ORT_DISABLE_TELEMETRY=1
 "$PYTHON" -m black --check packages/markitdown-web scripts/docling scripts/ci scripts/evaluate_web.py scripts/verify_v1_docling.py scripts/stage-desktop-downloads.py scripts/verify-desktop-service.py scripts/verify-product-site.py scripts/verify-mac-package.py
 "$PYTHON" -m mypy --follow-imports=silent --config-file packages/markitdown-web/pyproject.toml packages/markitdown-web/src
 "$PYTHON" -m pytest -q packages/markitdown-web/tests
-"$PYTHON" scripts/evaluate_web.py --out .venv/synthetic-evaluation
+# A unique ignored directory prevents old success evidence from mixing with a new run.
+mkdir -p .venv
+EVALUATION_OUT="$(mktemp -d .venv/synthetic-evaluation.XXXXXX)"
+"$PYTHON" scripts/evaluate_web.py --api-handoff --out "$EVALUATION_OUT"
 "$PYTHON" packages/markitdown-web/tests/browser_e2e.py --self-check
 "$PYTHON" -m pytest -q scripts/docling/tests
 bash -n scripts/docling/install.sh
