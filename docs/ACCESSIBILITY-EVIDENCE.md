@@ -202,3 +202,10 @@ unchanged 99-scenario frontend checks pass locally. Application bytes, native
 smoke code, dependencies, and workflows are unchanged by this follow-up. A fresh
 exact-head browser CI run remains required; local Chromium availability has not
 changed. Prior green runs do not erase the later failed run.
+
+The follow-up harness commit `1de8a18f2373525f3fb1e1f3f08d2c73e1008e70`
+subsequently passed tests `37721801605` (including browser job `113130906885`),
+desktop build `37721801573`, and pre-commit `37721801574`. The application remained
+byte-identical to the separately accepted Mac baseline `98938961`; actual Mac
+save/cancel, focus, compositor pixels, and isolated Obsidian results and their
+remaining limits are recorded in [the acceptance summary](ROADMAP-ACCEPTANCE.zh-CN.md).
