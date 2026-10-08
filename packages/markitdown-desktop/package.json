@@ -1,0 +1,63 @@
+{
+  "name": "markitdown-desktop",
+  "version": "1.1.0-dev.1",
+  "private": true,
+  "description": "MarkItDown desktop service client",
+  "author": "Gloamere",
+  "license": "MIT",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/setup.js && node --check scripts/build-mac-signed.cjs && node --check tests/launch-app.cjs && node --check scripts/build-evidence.cjs && node --test tests/policy.test.cjs tests/build-evidence.test.cjs",
+    "test:smoke": "node tests/setup-smoke.cjs",
+    "build:mac": "electron-builder --mac --arm64 --publish never",
+    "build:mac:signed": "node scripts/build-mac-signed.cjs",
+    "build:win": "electron-builder --win --x64 --publish never",
+    "build:evidence:mac": "node scripts/build-evidence.cjs build macos",
+    "build:evidence:win": "node scripts/build-evidence.cjs build windows",
+    "evidence:finalize": "node scripts/build-evidence.cjs finalize"
+  },
+  "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "electron": "44.6.0",
+    "electron-builder": "26.15.3",
+    "playwright": "1.63.0"
+  },
+  "build": {
+    "appId": "com.gloamere.markitdown",
+    "productName": "MarkItDown",
+    "asar": true,
+    "files": [
+      "src/**",
+      "package.json",
+      "LICENSE"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "artifactName": "MarkItDown-${version}-${os}-${arch}-unsigned.${ext}",
+    "icon": "src/icon.png",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null,
+      "minimumSystemVersion": "12.0.0"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": false
+    }
+  },
+  "overrides": {
+    "global-agent": "4.1.3"
+  }
+}

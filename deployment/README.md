@@ -1,0 +1,91 @@
+# Controlled deployment package
+
+These are reviewable templates, not an executed installation. They do not create
+accounts, obtain certificates, change DNS/network permissions, or deploy a service.
+The recorded Tencent host is not currently verified or authorized by this work.
+
+## Required contract
+
+- Linux with an approved unprivileged account, working required namespaces,
+  Bubblewrap and libseccomp; verify `docs/SANDBOX-RUNTIME.md` positive attack tests
+- Single application process and scheduler, loopback `127.0.0.1:8765` only
+- Dedicated runtime image root, read-only approved code/models, private data root
+- One exact public HTTPS origin, `MARKITDOWN_COOKIE_SECURE=1`, production mode
+- TLS terminates at a same-host, controlled proxy; preserve the configured Host
+  and Origin. The app never trusts arbitrary Forwarded headers or client IPs
+- Proxy per-IP + server-wide limits, upload time/size limits and connection caps
+- Host memory/process/disk capacity verified with concurrent synthetic jobs;
+  logical application storage reservations are not disk or RSS hard quotas
+- Body-free logs, independent backup/journal retention policy, monitored failures
+
+The app deliberately aggregates authentication IP limiting behind a loopback
+proxy, rather than trusting unverified forwarded client IP. The proxy applies
+per-client limits. A trusted-IP forwarding feature would need separate design.
+
+## Installation/upgrade sequence for an authorized operator
+
+1. Freeze the exact release commit and dependency lock files, review notices.
+2. Build/export the parser runtime and verify its digest and required capability
+   tests before installing the app; do not weaken a failed sandbox to get online.
+3. Install the app into a versioned directory and provision an empty private data
+   directory. The eventual administrator runs interactive `bootstrap-admin` and
+   enters their own password. Existing data must never be reset to regain access.
+4. Review hostname/certificates in nginx and application settings together. Run
+   nginx's syntax test before enabling the proxy. Do not enable wildcard hosts or
+   remove CSRF/Origin checks. Proxy and certificate tooling are external to this
+   repository; this change does not exercise them on a live server.
+5. Test login, invitation, both permitted profiles, copy/download, cancellation,
+   isolation, cross-owner denial, expiry and backup/restore using synthetic data.
+6. Record results and obtain separate rollout approval before directing real
+   users to the service. No application code test certifies filing/legal duties.
+
+## Recovery and rollback
+
+Stop admissions at the proxy, stop the service, and confirm the worker lock can
+be acquired before taking an offline backup. Never copy only an active SQLite
+main file. Keep the recovery journal newer than the snapshot. Restore into a
+new empty directory, apply later deletions/deactivations, invalidate sessions
+and invitations, and run verification before switching the configured data path.
+Do not automatically revert to an old database on a code rollback: it can revive
+files/permissions and discard usage counts. Prefer the previous compatible code
+on current data; if a schema downgrade is needed, use the tested restore route.
+Keep the previous directory until the owner accepts recovery, with its separately
+approved retention policy. Record observed restore duration; no RTO/RPO promised.
+
+## References
+
+- [nginx request limits](https://nginx.org/en/docs/http/ngx_http_limit_req_module.html)
+- [nginx proxy header behavior](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)
+- [SQLite backup API](https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup)
+
+## Executed CI production-boundary job
+
+The PR workflow now contains a bounded transitional Ubuntu 22.04 job. It uses existing runner
+Docker access, builds reviewed checksum-pinned Bubblewrap 0.13.0 into runner temp,
+and first checks required namespaces. The earlier Ubuntu 24.04 attempt failed
+under its default policy; no policy overrides were made.
+It does not change sysctl, grant container privileges, add credentials, enable
+unconfined security options or use a weakened fallback. A denied prerequisite
+fails the job. Official Python3.12.14 and uv0.12.19 image versions are checked,
+resolved to immutable repository digests once per run and recorded before build.
+No digest is invented in this repository; the runtime recipe accepts only digests.
+
+The job exports only its newly built image and runs positive boundary/lifecycle
+checks, seven standard formats, and the bounded actual production Docling probe,
+two-page preflight/conversion/preview, three-page refusal and cleanup checks. These
+passed on ba32c373; they do not establish intended-host physical capacity or TLS.
+Image/package provenance is printed to the job summary. The per-Dockerfile context
+allowlist excludes service data and secret files, while preserving the original
+upstream Docker build context ([Docker documentation](https://docs.docker.com/build/building/context/#dockerignore-files)).
+
+Preparation and syntax checks alone are not CI execution. The owner enabled
+Actions after the initial preparation checkpoint; exact executed results are in
+[the validation record](../docs/V1-VALIDATION.md). No permissions or secrets were
+expanded by this work, and the application remains loopback-only.
+
+The transitional GitHub Ubuntu 22.04 runner retires on 2027-04-17 and needs migration.
+It is a test-only compatibility decision, not production OS approval. Runtime
+selection/provenance details and sources are in docs/SANDBOX-RUNTIME.md.
+Browser screenshots/downloads are not uploaded to GitHub; only content-free test
+status and diagnostic locations enter public CI logs. Private visual review
+remains separate. The initial failure-only artifact is left unchanged.

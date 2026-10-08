@@ -1,0 +1,5 @@
+# Optional real-browser gate. Install only on an authorized, browser-capable runner.
+# Verified against https://pypi.org/project/playwright/1.63.0/ on 2026-10-07.
+# This is a pinned input, not a fully resolved/hash-locked browser environment.
+-r requirements-web.lock
+playwright==1.63.0

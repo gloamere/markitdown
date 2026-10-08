@@ -1,0 +1,39 @@
+# Reviewed template, not an installation or TLS certificate provisioning script.
+# Put limit zones in the nginx http context; choose approved hostname/cert paths.
+# TLS ingress and application are on the same host. Do not expose port 8765.
+limit_req_zone $binary_remote_addr zone=markitdown_perip:10m rate=5r/s;
+limit_req_zone $server_name zone=markitdown_global:1m rate=30r/s;
+limit_conn_zone $binary_remote_addr zone=markitdown_connections:10m;
+
+server {
+    listen 443 ssl;
+    server_name markitdown.example.com;
+    if ($host != markitdown.example.com) { return 421; }
+    ssl_certificate /etc/ssl/markitdown/fullchain.pem;
+    ssl_certificate_key /etc/ssl/markitdown/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 51m;
+    client_body_timeout 30s;
+    client_header_timeout 10s;
+    keepalive_timeout 15s;
+    limit_req zone=markitdown_perip burst=20 nodelay;
+    limit_req zone=markitdown_global burst=40 nodelay;
+    limit_req_status 429;
+    limit_conn markitdown_connections 6;
+    # Request URLs may contain user-chosen values; no access/body/token logging.
+    access_log off;
+
+    location / {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header Forwarded "";
+        proxy_set_header Connection "";
+        proxy_read_timeout 90s;
+        proxy_send_timeout 90s;
+        proxy_buffering off;
+    }
+}

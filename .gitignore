@@ -166,3 +166,17 @@ cython_debug/
 src/.DS_Store
 .DS_Store
 .cursorrules
+# Local multi-user application data: never commit accounts, uploads or sessions.
+.markitdown-data/
+node_modules/
+.venv-ui/
+/packages/markitdown-desktop/dist/
+/packages/markitdown-web/src/markitdown_web/static/downloads/
+/packages/markitdown-web/src/markitdown_web/static/downloads.local.json
+/docs/evidence/desktop-ui/
+
+# Generated v1 synthetic input/output evidence is retained privately for the owner.
+# Do not accidentally publish raw test artifacts with ordinary code pushes.
+/docs/evidence/v1-docling/
+/docs/evidence/v1-local-evaluation/
+/docs/evidence/v1-validation/

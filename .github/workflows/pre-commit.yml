@@ -1,6 +1,9 @@
 name: pre-commit
 on: [pull_request]
 
+env:
+  ORT_DISABLE_TELEMETRY: "1"
+
 jobs:
   pre-commit:
     runs-on: ubuntu-latest

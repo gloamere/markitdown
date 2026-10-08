@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="description" content="邀请制文档工作台，将文件转换为 Markdown。独立账户、私有历史，按任务显示的到期时间保留文件。">
+    <title>MarkItDown · 资料工作台</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <div class="app-shell">
+      <aside class="app-sidebar" aria-label="工作台导航">
+        <a class="brand" href="/app" aria-label="MarkItDown 工作台"><span class="brand-mark" aria-hidden="true">m↓</span><span>MarkItDown<span class="brand-edition">DOCUMENT WORKSPACE</span></span></a>
+        <p class="nav-caption">工作空间</p><nav class="workspace-nav" aria-label="主要导航"><button type="button" class="nav-item" id="nav-workspace" aria-pressed="true" disabled><span aria-hidden="true">＋</span>文档转换</button><button type="button" class="nav-item" id="nav-history" aria-pressed="false" disabled><span aria-hidden="true">▤</span>任务与历史</button><button type="button" class="nav-item" id="admin-toggle" aria-expanded="false" aria-controls="admin-panel" hidden><span aria-hidden="true">⚙</span>管理后台</button></nav>
+        <div class="sidebar-bottom"><div class="service-indicator"><span class="status-dot" aria-hidden="true"></span><span id="service-state">连接服务中</span></div><p>文件在连接的服务处理<br>账户之间独立访问</p><a href="/" class="website-link">产品介绍与下载 ↗</a></div>
+      </aside>
+      <main id="main-content" tabindex="-1">
+        <header class="intro"><div><p class="eyebrow" id="view-eyebrow">MARKITDOWN / WORKSPACE</p><h1 id="page-title">文档工作台</h1><p class="intro-copy" id="view-description">将文件转换为 Markdown，继续你的阅读、编辑与创作。</p></div><span class="local-badge">邀请制访问</span></header>
+        <p class="processing-destination">文件处理服务 <span id="processing-origin" dir="ltr"></span><span class="processing-explanation">文件将上传到此地址所在的服务处理</span></p>
+        <p class="field-help" id="deployment-notice" role="status">正在核对服务运行模式…</p>
+        <div class="connection-notice" id="connection-notice" hidden><p id="connection-message"></p><button type="button" class="text-button" id="reconnect-button">重新连接</button></div>
+        <div class="notice" id="notice" role="alert" hidden></div>
+        <section class="bootstrap-notice panel" id="bootstrap-notice" hidden aria-labelledby="bootstrap-title"><h2 id="bootstrap-title">工作台还差最后一步</h2><p>请服务所有者在运行服务的电脑上，执行 <code>markitdown-web bootstrap-admin</code>，按提示创建首位管理员。网页不能创建管理员，也没有默认密码。</p></section>
+
+        <section class="auth-layout" id="auth-section" aria-label="登录或使用邀请注册">
+          <div class="auth-story"><div class="auth-document" aria-hidden="true"><span class="doc-type">DOCX → MARKDOWN</span><strong>让内容进入工作流</strong><span class="doc-line"></span><span class="doc-line short"></span><code># 项目资料<br><br>保留内容，继续编辑。</code></div><h2>文档有序，<br>创作自由。</h2><p>你的文件、任务与转换结果，<br>在一个清晰的工作区里衔接。</p><ul><li>独立账户，各自管理文件</li><li id="auth-retention">文件有效期从入队起计算，请及时导出</li><li>在服务所在电脑处理，不上传第三方转换服务</li></ul></div>
+          <div class="panel auth-panel">
+            <div class="auth-tabs" role="tablist" aria-label="账户操作"><button type="button" id="login-tab" role="tab" aria-selected="true" aria-controls="login-form">登录</button><button type="button" id="register-tab" role="tab" aria-selected="false" aria-controls="register-form" tabindex="-1">邀请注册</button></div>
+            <p class="auth-message" id="auth-message" role="status" aria-live="polite">正在连接服务…</p>
+            <form id="login-form" role="tabpanel" aria-labelledby="login-tab">
+              <label for="login-username">用户名</label><input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9_.\-]{3,32}" minlength="3" maxlength="32" required aria-describedby="username-help">
+              <label for="login-password">密码</label><input id="login-password" name="password" type="password" autocomplete="current-password" minlength="6" maxlength="256" required>
+              <button type="submit" class="primary-button" id="login-button" disabled>进入工作台 <span aria-hidden="true">→</span></button>
+            </form>
+            <form id="register-form" role="tabpanel" aria-labelledby="register-tab" hidden>
+              <label for="register-username">用户名</label><input id="register-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" pattern="[a-z0-9_.\-]{3,32}" minlength="3" maxlength="32" required aria-describedby="username-help">
+              <label for="register-password">密码</label><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="6" maxlength="256" required aria-describedby="password-help"><p class="field-help" id="password-help">6–128 个字符，最多 512 UTF-8 字节；建议使用独立长密码或密码管理器</p>
+              <label for="invite-token">邀请码</label><input id="invite-token" name="invite_token" aria-describedby="invite-help" autocomplete="off" autocapitalize="none" spellcheck="false" required><p class="field-help" id="invite-help">向工作台管理员索取，一次性使用。过期、已使用或撤销后，请联系管理员获取新邀请。</p>
+              <button type="submit" class="primary-button" id="register-button" disabled>创建账户</button>
+            </form>
+            <p class="field-help" id="username-help">用户名为 3–32 位小写英文字母、数字、下划线、点或短横线</p>
+            <p class="field-help">目前没有网页改密或找回密码功能；需要帮助时请联系邀请你的管理员。只上传你有权处理、且允许在服务所在电脑处理的文件。</p>
+            <button type="button" class="text-button" id="logout-retry" hidden>重试退出</button>
+          </div>
+        </section>
+
+        <section id="session-section" hidden aria-label="个人资料工作台">
+          <div class="account-bar"><div><span class="account-name" id="account-name"></span><span class="account-role" id="account-role"></span><p id="quota-summary" role="status" aria-live="polite"></p><details class="account-details"><summary>额度与保留规则</summary><p class="quota-reset" id="quota-reset"></p><p class="quota-reset" id="account-retention"></p></details></div><div class="account-actions"><button type="button" class="text-button" id="logout-button">退出登录</button></div></div>
+          <div class="workspace-overview" id="workspace-overview"><div><p class="eyebrow">DOCUMENTS / CONVERT</p><h2 id="workspace-heading">转换与结果</h2></div><p id="workspace-status" role="status" aria-live="polite">添加文件，开始整理</p><a class="text-button jump-output" href="#output-heading">前往阅读区 ↓</a></div>
+          <section class="workspace" id="workspace" aria-label="文档转换工作区">
+            <section class="panel input-panel" aria-labelledby="files-heading">
+              <div class="panel-header"><h2 id="files-heading"><span class="step-number">01</span><span id="input-heading-label">添加文件</span></h2><button type="button" class="text-button" id="clear-button" disabled>清空待上传</button></div>
+              <div class="input-body" id="upload-section">
+                <fieldset class="engine-group" id="engine-group" aria-describedby="engine-selection-note"><legend>选择转换引擎</legend><div class="engine-options">
+                  <label class="engine-card" id="engine-card-markitdown" for="engine-markitdown"><input id="engine-markitdown" type="radio" name="engine" value="markitdown" checked aria-describedby="engine-description-markitdown engine-limit-markitdown"><span class="engine-card-content"><span class="engine-card-heading"><strong>常见文档转 Markdown</strong><span class="engine-badge" id="engine-badge-markitdown">默认</span></span><span class="engine-description" id="engine-description-markitdown">MarkItDown · Office、文本与数字 PDF 内容准备</span><span class="engine-limit" id="engine-limit-markitdown">多种格式 · 无 2 页硬门槛 · OCR 关闭</span></span></label>
+                  <label class="engine-card" id="engine-card-docling" for="engine-docling"><input id="engine-docling" type="radio" name="engine" value="docling" disabled aria-describedby="engine-description-docling engine-limit-docling"><span class="engine-card-content"><span class="engine-card-heading"><strong>短 PDF 版面解析实验</strong><span class="engine-badge" id="engine-badge-docling">未启用</span></span><span class="engine-description" id="engine-description-docling">Docling · 尝试保留阅读顺序与表格结构，结果仍需核查</span><span class="engine-limit" id="engine-limit-docling">仅整份 1–2 页 PDF / 10 MiB · OCR 关闭</span></span></label>
+                </div><p class="engine-selection-note" id="engine-selection-note" role="status" aria-live="polite">默认使用 MarkItDown</p></fieldset>
+                <div class="drop-zone" id="drop-zone" role="group" aria-label="添加待转换文件" aria-describedby="upload-limits format-note"><span class="upload-symbol" aria-hidden="true">↑</span><p class="drop-title">把文件拖到这里</p><p class="drop-subtitle">支持多选，也可以继续添加</p><button type="button" class="choose-button" id="choose-button" disabled>选择文件<span aria-hidden="true">＋</span></button><input id="file-input" type="file" multiple aria-label="选择要转换的文件" hidden disabled><p class="upload-limits" id="upload-limits"></p></div>
+                <div class="format-list" aria-label="支持的文件格式" id="format-list"></div><p class="format-note" id="format-note">PDF 需要文字层，不支持扫描件 OCR · 不支持 URL 上传</p>
+                <div class="queue-heading"><h3>待上传 <span id="queue-count">0</span></h3><span id="queue-size">0 B</span></div><div class="queue-empty" id="queue-empty"><span aria-hidden="true">▤</span><p>你的文件将在这里排好队</p></div><ul class="file-list" id="file-list" aria-label="待上传文件"></ul>
+              </div>
+              <div class="conversion-footer" id="submit-section"><progress class="indeterminate-progress" id="upload-progress" aria-label="正在上传文件，进度未知" hidden></progress><button type="button" class="primary-button" id="convert-button" disabled><span id="convert-label">上传并转换</span><span class="convert-arrow" aria-hidden="true">→</span></button><p id="conversion-summary" role="status" aria-live="polite" aria-atomic="true">上传与重试进入队列后，均计入当日额度</p><button type="button" class="text-button upload-recheck" id="upload-recheck" hidden>安全重试同一批上传</button><details class="submission-rules"><summary>查看计次规则</summary><p class="field-help quota-rules">每个接收入队的文件计 1 次，失败、取消、删除不退次数；重试及重启恢复中断的运行任务会再计 1 次。格式、大小或 Docling 超页等入队前拒绝不计次；空结果可能在转换后才发现。</p></details><a class="mobile-result-link" href="#output-heading">前往阅读与导出 ↓</a></div>
+              <section class="history-section" aria-labelledby="history-heading"><div class="queue-heading"><h3 id="history-heading">我的转换记录 <span id="history-count">0</span></h3><button type="button" class="text-button" id="refresh-button">刷新</button></div><div class="history-filters" role="group" aria-label="筛选转换记录"><button type="button" id="filter-all" aria-pressed="true">全部</button><button type="button" id="filter-active" aria-pressed="false">处理中</button><button type="button" id="filter-completed" aria-pressed="false">已完成</button><button type="button" id="filter-failed" aria-pressed="false">需处理</button></div><p class="history-note" id="history-note" role="status" aria-live="polite">仅展示当前账户最近 100 条记录</p><div class="history-empty" id="history-empty">还没有转换记录</div><ul class="file-list history-list" id="history-list" aria-label="我的转换记录"></ul><div class="archive-bar"><span id="archive-count">勾选已完成文件，最多 10 个</span><button type="button" class="choose-button" id="archive-button" disabled>下载 ZIP</button></div></section>
+            </section>
+            <section class="panel output-panel" aria-labelledby="output-heading">
+              <div class="panel-header output-header"><h2 id="output-heading" tabindex="-1"><span class="step-number">02</span>阅读与导出</h2><span class="output-label" id="output-label">等待选择</span></div>
+              <div class="output-toolbar"><div class="view-switch" role="tablist" aria-label="Markdown 显示方式"><button type="button" id="preview-tab" role="tab" aria-selected="true" aria-controls="preview-panel" tabindex="0">预览</button><button type="button" id="source-tab" role="tab" aria-selected="false" aria-controls="source-panel" tabindex="-1">源码</button><button type="button" id="split-tab" role="tab" aria-selected="false" aria-controls="preview-panel source-panel" tabindex="-1">对照</button></div><div class="output-actions"><button type="button" class="tool-button" id="copy-button" disabled><span aria-hidden="true">▣</span>复制</button><button type="button" class="tool-button" id="download-button" disabled><span aria-hidden="true">↓</span>下载 .md</button></div></div>
+              <div class="document-heading" id="document-heading" hidden><span id="document-name"></span><span class="document-meta"><span id="document-engine"></span><span id="document-length"></span></span></div>
+              <p class="result-review" id="result-review" hidden>转换已完成，请核对关键数字、单位、表头和脚注。本次未进行 OCR；页数与空警告列表不代表内容完整。</p>
+              <details class="job-facts" id="job-facts" hidden><summary>任务、来源与尝试记录</summary><dl id="job-facts-list"></dl><ol id="attempt-list"></ol><button type="button" class="text-button" id="manifest-download" disabled>下载处理清单 .json</button><p class="field-help">处理清单记录实际尝试与配置，不是原生 DoclingDocument，也不包含可编辑坐标。</p></details>
+              <div class="output-content" id="output-content"><div class="output-empty" id="output-empty"><div class="paper-illustration" aria-hidden="true"><span>#</span><i></i><i></i><i></i></div><h3 id="empty-title">下一站，Markdown</h3><p id="empty-description">上传文件，或选择一条转换记录。在这里预览结果，或查看 Markdown 源码。</p><progress class="indeterminate-progress document-progress" id="document-progress" aria-label="正在处理，进度未知" hidden></progress><div class="empty-actions"><button type="button" class="choose-button" id="document-reload" hidden>重新读取结果</button><button type="button" class="choose-button" id="document-retry" hidden>重试转换</button><button type="button" class="text-button" id="document-cancel" hidden>取消此任务</button></div></div><div id="preview-panel" class="document-panel" role="tabpanel" aria-labelledby="preview-tab" tabindex="0" hidden><p class="pane-caption">阅读预览</p><article class="markdown-body" id="markdown-preview"></article></div><div id="source-panel" class="document-panel source-panel" role="tabpanel" aria-labelledby="source-tab" hidden><label class="pane-caption" for="markdown-source">Markdown 源码</label><textarea class="markdown-source" id="markdown-source" aria-label="Markdown 源码" spellcheck="false" readonly></textarea></div></div>
+              <p class="preview-safety" id="preview-safety" hidden>安全预览已停用文档链接和图片。下载的 Markdown 请按不可信内容处理。</p>
+              <div class="output-footer"><span><span class="small-dot" aria-hidden="true"></span>仅本人可访问 · 有效期从入队起计算</span><span id="document-expiry">请及时下载需要保留的内容</span></div>
+            </section>
+          </section>
+          <section class="panel admin-panel" id="admin-panel" hidden aria-labelledby="admin-heading">
+            <div class="panel-header"><h2 id="admin-heading">管理后台</h2><button type="button" class="text-button" id="admin-refresh">刷新管理信息</button></div>
+            <p class="admin-explanation">管理身份、邀请与使用边界。管理员身份不扩大文档权限，此处不提供其他成员的正文或下载。</p>
+            <div class="admin-grid">
+              <section aria-labelledby="invites-heading"><h3 id="invites-heading">邀请新成员</h3><p class="field-help">单次邀请，注册成功后消耗。撤销只影响尚未注册的邀请。</p>
+                <div class="invite-controls"><label for="invite-hours">有效期（1–168 小时）<select id="invite-hours"><option value="1">1 小时</option><option value="12">12 小时</option><option value="24" selected>24 小时</option><option value="72">3 天</option><option value="168">7 天</option></select></label><button type="button" class="choose-button" id="invite-create">生成单次邀请码</button></div>
+                <div class="invite-result" id="invite-result" hidden><label for="new-invite-token">新邀请码 · 仅本次显示，请及时复制</label><input id="new-invite-token" readonly autocomplete="off"><p id="invite-expiry"></p><button type="button" class="text-button" id="invite-copy">复制邀请码</button><button type="button" class="text-button" id="invite-dismiss">隐藏并准备下一条</button></div>
+                <ul class="admin-list" id="invites-list" aria-label="邀请码列表"></ul>
+              </section>
+              <section aria-labelledby="users-heading"><h3 id="users-heading">账户与额度</h3><p class="field-help" id="user-defaults">正在读取系统默认值…</p><p class="field-help">账户额度与大小调整在后续准入时生效，不退还已用次数。停用会撤销会话并阻止结果发布；正在运行的任务可能等待进程退出才回收资源。每日额度按 UTC 00:00 重置。</p><ul class="admin-list" id="users-list" aria-label="账户与额度"></ul></section>
+            </div>
+            <section class="admin-config-section" aria-labelledby="settings-heading"><h3 id="settings-heading">有界业务设置</h3><p class="field-help">默认额度与大小仅用于之后注册的账户；保留时长仅用于之后入队的新任务。已有账户限制、任务到期时间和运行任务不追溯修改。</p>
+              <p id="settings-version" class="field-help"></p>
+              <form id="settings-form"><div class="settings-fields">
+                <label for="setting-daily-quota">新账户默认每日额度<input type="number" id="setting-daily-quota" min="1" max="1000" step="1" required><span class="field-help" id="setting-quota-help"></span></label>
+                <label for="setting-file-mib">新账户默认单文件上限（MiB）<input type="number" id="setting-file-mib" min="1" max="20" step="any" required><span class="field-help" id="setting-file-help"></span></label>
+                <label for="setting-retention-hours">新任务文件有效期（小时）<input type="number" id="setting-retention-hours" min="1" max="168" step="any" required><span class="field-help" id="setting-retention-help"></span></label>
+              </div><button type="submit" class="choose-button" id="settings-save" disabled>核对并保存设置</button></form>
+              <p class="admin-status" id="settings-status" role="status" aria-live="polite"></p>
+            </section>
+            <section class="admin-config-section" aria-labelledby="capabilities-heading"><h3 id="capabilities-heading">服务能力与硬限制 · 只读</h3><p class="field-help">以下是部署配置与当前引擎能力，不能在网页关闭安全保护、增加任意模型或修改并发。逻辑存储预约不等于磁盘硬配额。</p><dl class="capability-list" id="service-config"></dl></section>
+            <section class="admin-config-section" aria-labelledby="audit-heading"><div class="admin-section-heading"><h3 id="audit-heading">管理审计</h3><button type="button" class="text-button" id="audit-refresh">刷新审计</button></div><p class="field-help" id="audit-note">展示最近管理事件；审计不包含正文、密码、会话或邀请码。审计保留与文件到期规则分开。</p><ol class="audit-list" id="audit-list"></ol></section>
+            <p class="admin-status" id="admin-status" role="status" aria-live="polite"></p>
+          </section>
+        </section>
+        <details class="retention-disclosure"><summary>文件生命周期与导出说明</summary><p>请在显示的到期时间前保存结果。到期后不能正常下载，历史记录可能继续显示；删除不等于安全擦除，备份与日志按单独政策处理。Markdown ZIP 不含原文件或可恢复修订库。</p></details>
+        <footer class="site-footer"><p>基于 Microsoft MarkItDown · 文件在运行服务的电脑上处理</p><p>独立账户 <span aria-hidden="true">/</span> 按入队时限保留 <span aria-hidden="true">/</span> 无第三方转换上传</p></footer>
+      </main>
+    </div>
+    <p class="sr-only" id="action-status" role="status" aria-live="polite" aria-atomic="true"></p>
+    <noscript><p class="noscript">请启用 JavaScript，以使用资料工作台。</p></noscript>
+  </body>
+</html>

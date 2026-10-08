@@ -1,0 +1,246 @@
+{
+  "started_at": "2026-10-06T11:22:15.970518+00:00",
+  "finished_at": "2026-10-06T11:23:47.812619+00:00",
+  "all_passed": true,
+  "benchmark_sha256": "ef645221e64106fade72e52da41e4943e23ea4fc1c8787d809dd75d9e6560d3d",
+  "source_sha256": {
+    "engines.py": "d4ae42602c494ab43f378b1379c202278a5d6831e76790166bf8325ca3eae559",
+    "docling_adapter.py": "e5bc42f37e76b008a26a0f832416ab083af944ae1e568994975e16f07d0cb6aa",
+    "docling_worker.py": "a807c8118fc7e4993923a8ec6008c7c38f756b982406b65f149d5ef9ac7d51b3",
+    "preview.py": "c3ba2b51c8fe3142aeb49a4b5c9d5639562b30c24fb7a205c16c24597cc0e947",
+    "jobs.py": "a43018f08db8fe643684e7693d6b7481789dec52e268654f7675a3c523d59622",
+    "state.py": "db2c3d5fe76d839f64bae85acb465f76e5e34c36a7b80b812b833ce5460ea352",
+    "app.py": "74b98960f4570b11e92dd34a9e5e7b7099d6055818e2a49ab447c576f212dc9f",
+    "conversion.py": "442516e2455ca307f09503912dfcfb0e0e9e722653ec98efe3ad7cd076fcdb3e",
+    "worker.py": "13408b3fc8a35b773f80eb2af807eb06cb51c6b87edbaa59588e3a23544a8b51"
+  },
+  "source_unchanged_during_benchmark": true,
+  "private_account_data_cleaned": true,
+  "scope": "Fresh synthetic authenticated in-process HTTP API, real scheduler and real bounded offline child processes. Sampled RSS, not OS maximum. No historical measurements reused.",
+  "report_sha256": "22d3050d69075738f5ebde235ed6e272c62925034f7520b6451d56dd295df2ca",
+  "checks": [
+    {
+      "case": "real_engine_config_ready",
+      "passed": true
+    },
+    {
+      "case": "reject_three_pages_before_quota_and_admission",
+      "passed": true
+    },
+    {
+      "case": "reject_over_10_mib",
+      "passed": true
+    },
+    {
+      "case": "reject_corrupted_pdf",
+      "passed": true
+    },
+    {
+      "case": "reject_encrypted_pdf",
+      "passed": true
+    },
+    {
+      "case": "convert_text_1page.pdf",
+      "passed": true
+    },
+    {
+      "case": "bounded_child_preview_text_1page.pdf",
+      "passed": true
+    },
+    {
+      "case": "convert_columns_table_1page.pdf",
+      "passed": true
+    },
+    {
+      "case": "bounded_child_preview_columns_table_1page.pdf",
+      "passed": true
+    },
+    {
+      "case": "convert_columns_table_2pages.pdf",
+      "passed": true
+    },
+    {
+      "case": "bounded_child_preview_columns_table_2pages.pdf",
+      "passed": true
+    },
+    {
+      "case": "ocr_off_image_only_fails_without_fallback",
+      "passed": true
+    },
+    {
+      "case": "docling_queue_serial_with_parallel_markitdown",
+      "passed": true
+    },
+    {
+      "case": "live_cancellation_kills_reaps_and_holds_slot",
+      "passed": true
+    },
+    {
+      "case": "real_canceled_job_retry_preserves_engine",
+      "passed": true
+    },
+    {
+      "case": "restart_preserves_metadata_and_runs_queued_job",
+      "passed": true
+    },
+    {
+      "case": "scratch_and_child_cleanup",
+      "passed": true
+    }
+  ],
+  "conversions": [
+    {
+      "fixture": "text_1page.pdf",
+      "engine": "docling",
+      "status": "succeeded",
+      "error": null,
+      "metadata": {
+        "engine": "docling",
+        "version": "2.133.0",
+        "page_count": 1,
+        "duration_seconds": 7.093,
+        "profile": "pdf-layout-local-v3",
+        "ocr": false,
+        "warnings": []
+      },
+      "wall_seconds_including_admission": 8.7374,
+      "source_sha256": "ac795754897b8a3be34ae58b916a5b4ca638a4a3299fc32ab27eeb609e2911fb",
+      "quality": {
+        "expected_sentinels": 2,
+        "sentinels_present": 2,
+        "missing_sentinels": []
+      },
+      "markdown_bytes": 381,
+      "html_bytes": 411,
+      "markdown_sha256": "7e42fe2739bc983df5308b7d03a90a48d569da777d796c7ccb937d2efdd95cc1",
+      "html_sha256": "54524ab536cd50bcec69b78a215335770f84bc4f76ca081c4be409ce6a0e1c9e",
+      "sampled_peak_rss_bytes": 1169276928,
+      "sampled_peak_rss_mib": 1115.11,
+      "child_wall_seconds": 8.6131,
+      "returncode": 0
+    },
+    {
+      "fixture": "columns_table_1page.pdf",
+      "engine": "docling",
+      "status": "succeeded",
+      "error": null,
+      "metadata": {
+        "engine": "docling",
+        "version": "2.133.0",
+        "page_count": 1,
+        "duration_seconds": 8.382,
+        "profile": "pdf-layout-local-v3",
+        "ocr": false,
+        "warnings": []
+      },
+      "wall_seconds_including_admission": 9.9688,
+      "source_sha256": "116d9d18f4f5dcb64396cf3f54ac32cb3d74dfd6779aeda0020e671bb796dcdd",
+      "quality": {
+        "expected_sentinels": 5,
+        "sentinels_present": 5,
+        "missing_sentinels": [],
+        "column_pages_expected": 1,
+        "column_pages_in_correct_order": 1,
+        "table_rows_exact": 4,
+        "table_rows_expected": 4,
+        "table_cells_exact_from_matching_rows": 12,
+        "table_cells_expected": 12
+      },
+      "markdown_bytes": 881,
+      "html_bytes": 1073,
+      "markdown_sha256": "1b49e0ba1d848a2f25a9c3206c65123057415dceecadb36a6631b73b8d4e5d35",
+      "html_sha256": "27bb0837c4e26f8f7e63ff4ce59448c17ef5f1bbfaef9b73d5513ea6ac2fbf95",
+      "sampled_peak_rss_bytes": 1199722496,
+      "sampled_peak_rss_mib": 1144.14,
+      "child_wall_seconds": 9.8342,
+      "returncode": 0
+    },
+    {
+      "fixture": "columns_table_2pages.pdf",
+      "engine": "docling",
+      "status": "succeeded",
+      "error": null,
+      "metadata": {
+        "engine": "docling",
+        "version": "2.133.0",
+        "page_count": 2,
+        "duration_seconds": 10.188,
+        "profile": "pdf-layout-local-v3",
+        "ocr": false,
+        "warnings": []
+      },
+      "wall_seconds_including_admission": 11.7155,
+      "source_sha256": "93e4daa7e8c7739bd694056362c2411e696791407e5c5b0ff5fac6af3aa9e8aa",
+      "quality": {
+        "expected_sentinels": 3,
+        "sentinels_present": 3,
+        "missing_sentinels": [],
+        "column_pages_expected": 2,
+        "column_pages_in_correct_order": 2,
+        "table_rows_exact": 8,
+        "table_rows_expected": 8,
+        "table_cells_exact_from_matching_rows": 24,
+        "table_cells_expected": 24
+      },
+      "markdown_bytes": 1764,
+      "html_bytes": 2146,
+      "markdown_sha256": "219a4f39842f0ab1ceb4e281eeee1b1602d081a844ca757cfab4b8a95deeaa1a",
+      "html_sha256": "dc58ed3b3da0635235745e04251f1c1ed9faf78aa2d3b59c1f5de975aad39675",
+      "sampled_peak_rss_bytes": 1297149952,
+      "sampled_peak_rss_mib": 1237.06,
+      "child_wall_seconds": 11.5943,
+      "returncode": 0
+    },
+    {
+      "fixture": "image_only_1page.pdf",
+      "engine": "docling",
+      "status": "failed",
+      "error": "没有提取到文字；PDF 增强未开启 OCR，扫描件暂不支持",
+      "metadata": {},
+      "wall_seconds_including_admission": 9.058,
+      "source_sha256": "6397ed87a122bf7bb42836d439420139e894785adffc246a3d7b513d6ca766de",
+      "sampled_peak_rss_bytes": 1175486464,
+      "sampled_peak_rss_mib": 1121.03,
+      "child_wall_seconds": 8.5705,
+      "returncode": 0
+    }
+  ],
+  "markitdown_baseline": {
+    "fixture": "columns_table_2pages.pdf",
+    "quality": {
+      "expected_sentinels": 3,
+      "sentinels_present": 3,
+      "missing_sentinels": [],
+      "column_pages_expected": 2,
+      "column_pages_in_correct_order": 0,
+      "table_rows_exact": 8,
+      "table_rows_expected": 8,
+      "table_cells_exact_from_matching_rows": 24,
+      "table_cells_expected": 24
+    },
+    "child_wall_seconds": 0.6347,
+    "sampled_peak_rss_mib": 121.93,
+    "timing_context": "This ordinary child ran alongside Docling; not an isolated timing comparison"
+  },
+  "cancellation": {
+    "passed": true,
+    "cancellation_to_reap_seconds": 0.0247,
+    "successor_started_at_seconds": 63.11366,
+    "outputs_absent": true,
+    "child": {
+      "returncode": -15,
+      "proc_entry_absent_after_reap": true,
+      "slot_present_before_terminate": true,
+      "slot_present_after_reap": true,
+      "reaped_at_seconds": 63.110036
+    }
+  },
+  "observed_process_count": 26,
+  "limitations": [
+    "Synthetic smoke corpus only; not a broad accuracy benchmark",
+    "RSS sampled at 10 ms; not OS maximum RSS",
+    "Conversion workers retained production seccomp and resource guards; observation wrappers only",
+    "Restart coverage uses a new JobService with preserved SQLite state and queued jobs, not a full OS reboot",
+    "No commits, pushes, deployments, persistent accounts, or external services"
+  ]
+}

@@ -4,12 +4,72 @@ permissions:
   contents: read
 
 env:
+  # Opt out before Python imports ONNX Runtime, including conversion tests.
+  ORT_DISABLE_TELEMETRY: "1"
   # Preserve Unicode in captured CLI output on Windows.
   PYTHONUTF8: "1"
   PIP_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
   UV_CONSTRAINT: ${{ github.workspace }}/.github/constraints.txt
 
 jobs:
+  browser-e2e:
+    # Transitional default-policy compatibility target; retires 2027-04-17.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned optional browser harness and official Chromium
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-browser-test.in
+          .venv/bin/python -m playwright install --with-deps chromium
+      - name: Run fresh-profile synthetic browser flows with Chromium sandbox enabled
+        run: .venv/bin/python packages/markitdown-web/tests/browser_e2e.py --out "${{ runner.temp }}/markitdown-browser-evidence"
+      - name: Verify product site at desktop and narrow widths on an isolated service
+        run: .venv/bin/python scripts/verify-product-site.py --out "${{ runner.temp }}/markitdown-site-evidence"
+
+  production-sandbox:
+    # Same mandatory namespaces/profile; no Ubuntu 24.04 policy overrides.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install official launcher build dependencies and pinned web tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential meson ninja-build pkg-config libcap-dev libselinux1-dev
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-web.lock
+      - name: Build verified official non-setuid Bubblewrap in runner temp
+        run: bash scripts/ci/build-bubblewrap.sh
+      - name: Verify production boundary without relaxing host policy
+        run: bash scripts/ci/production-sandbox.sh
+
+  web-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned web dependencies and local packages
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-web.lock
+          .venv/bin/python -m pip install --no-deps -e ./packages/markitdown -e ./packages/markitdown-web
+      - name: Run web release checks
+        run: bash scripts/check-web.sh
+
   tests:
     runs-on: ${{ matrix.os }}
     strategy:

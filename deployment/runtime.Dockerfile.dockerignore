@@ -1,0 +1,16 @@
+*
+!requirements-web.lock
+!packages/
+!packages/markitdown/
+!packages/markitdown/**
+!scripts/
+!scripts/docling/
+!scripts/docling/pyproject.toml
+!scripts/docling/uv.lock
+**/__pycache__/
+**/.pytest_cache/
+**/.env
+**/.env.*
+**/*.sqlite3
+**/*.sqlite3-wal
+**/*.sqlite3-shm

@@ -1,0 +1,83 @@
+name: desktop-build
+on:
+  push:
+    branches: [dev]
+    paths: ['packages/markitdown-desktop/**', '.github/workflows/desktop-build.yml']
+  pull_request:
+    paths: ['packages/markitdown-desktop/**', '.github/workflows/desktop-build.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            build: build:evidence:mac
+          - os: windows-latest
+            build: build:evidence:win
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    defaults:
+      run:
+        working-directory: packages/markitdown-desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/markitdown-desktop/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:smoke
+        env:
+          MARKITDOWN_TEST_BACKGROUND: '1'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        if: runner.os == 'macOS'
+        with:
+          python-version: '3.12'
+      - name: Install isolated service dependencies for native Mac integration
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-web.lock
+          .venv/bin/python -m pip install --no-deps -e ./packages/markitdown -e ./packages/markitdown-web
+      - name: Verify native Mac client with a fresh synthetic service
+        if: runner.os == 'macOS'
+        working-directory: .
+        env:
+          ORT_DISABLE_TELEMETRY: '1'
+        run: .venv/bin/python scripts/verify-desktop-service.py --out "${{ runner.temp }}/markitdown-native-evidence"
+      - run: npm run ${{ matrix.build }}
+      - name: Verify assembled Mac app connection flow
+        if: runner.os == 'macOS'
+        env:
+          MARKITDOWN_TEST_EXECUTABLE: ${{ github.workspace }}/packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app/Contents/MacOS/MarkItDown
+          MARKITDOWN_TEST_BACKGROUND: '1'
+        run: npm run test:smoke
+      - name: Verify assembled Mac app with a fresh synthetic service
+        if: runner.os == 'macOS'
+        working-directory: .
+        env:
+          ORT_DISABLE_TELEMETRY: '1'
+        run: .venv/bin/python scripts/verify-desktop-service.py --app packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app --out "${{ runner.temp }}/markitdown-packaged-evidence"
+      - name: Bind unsigned installers to clean source and packaged runtime
+        run: npm run evidence:finalize
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: MarkItDown-${{ matrix.os }}-unsigned-${{ github.sha }}
+          path: |
+            packages/markitdown-desktop/dist/*.dmg
+            packages/markitdown-desktop/dist/*.zip
+            packages/markitdown-desktop/dist/*.exe
+            packages/markitdown-desktop/dist/*.build-evidence.json
+          if-no-files-found: error
+          retention-days: 14
