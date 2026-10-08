@@ -7,6 +7,7 @@ This is deliberately not a pytest-collected module. See docs/BROWSER-TESTS.md.
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import hashlib
 import importlib.metadata
@@ -46,6 +47,7 @@ STEPS = (
     "account_controls_self_disable_and_audit",
     "logout_stale_response_and_back_privacy",
     "mobile_layout_keyboard_and_screenshots",
+    "keyboard_login_choose_remove_convert_read_and_export",
 )
 
 
@@ -146,6 +148,8 @@ class Evidence:
                 "Screenshots require separate human visual review",
                 "No production sandbox, host/TLS, Docling model or real-user acceptance",
                 "No assertion that native clipboard write succeeds on every platform",
+                "File chooser bytes are fixture injection, not native dialog acceptance",
+                "No manual screen-reader or native keyboard-zoom acceptance",
             ],
             "platform": platform.platform(),
             "python": platform.python_version(),
@@ -511,9 +515,20 @@ async def assert_private_cleared(page, expect) -> None:
     )
 
 
-async def save_download(page, selector: str, relative: str, evidence: Evidence) -> Path:
+async def save_download(
+    page, selector: str, relative: str, evidence: Evidence, *, keyboard=False
+) -> Path:
     async with page.expect_download() as event:
-        await page.locator(selector).click()
+        if keyboard:
+            require(
+                await page.locator(selector).evaluate(
+                    "el => el === document.activeElement"
+                ),
+                "Keyboard download control is not focused",
+            )
+            await page.keyboard.press("Enter")
+        else:
+            await page.locator(selector).click()
     download = await event.value
     require(await download.failure() is None, "Browser download failed")
     path = artifact_path(evidence.output, relative)
@@ -527,6 +542,138 @@ async def save_download(page, selector: str, relative: str, evidence: Evidence) 
     )
     evidence.flush()
     return path
+
+
+async def tab_to(page, selector: str, expect, stops: list) -> None:
+    """Find the next focus stop using only real Tab events, never focus()."""
+    target = page.locator(selector)
+    await expect(target).to_be_visible()
+    for count in range(81):
+        if await target.evaluate("el => el === document.activeElement"):
+            await expect(target).to_be_focused()
+            stops.append({"selector": selector, "tab_presses": count})
+            return
+        await page.keyboard.press("Tab")
+    raise AssertionError(
+        f"Keyboard could not reach {selector} within one bounded journey"
+    )
+
+
+async def keyboard_journey(page, first_path, second_path, evidence, expect) -> dict:
+    """All application interactions here use keyboard events. File bytes alone
+    enter through Playwright's intercepted chooser, not an OS-dialog acceptance.
+    """
+    stops = []
+    await page.goto("/app")
+    await expect(page.locator("#login-button")).to_be_enabled()
+    await page.keyboard.press("Tab")
+    await expect(page.locator(".skip-link")).to_be_focused()
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#main-content")).to_be_focused()
+    await tab_to(page, "#login-tab", expect, stops)
+    await page.keyboard.press("ArrowRight")
+    await expect(page.locator("#register-tab")).to_be_focused()
+    await page.keyboard.press("Home")
+    await expect(page.locator("#login-tab")).to_be_focused()
+    await tab_to(page, "#login-username", expect, stops)
+    await page.keyboard.type("synthetic-reader")
+    await tab_to(page, "#login-password", expect, stops)
+    await page.keyboard.type(USER_PASSWORD)
+    await tab_to(page, "#login-button", expect, stops)
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#session-section")).to_be_visible()
+    await expect(page.locator("#login-password")).to_have_value("")
+    before = await api_ok(page, "/api/me")
+    await tab_to(page, "#choose-button", expect, stops)
+    async with page.expect_file_chooser() as event:
+        await page.keyboard.press("Enter")
+    chooser = await event.value
+    require(chooser.is_multiple(), "Keyboard chooser must allow multiple files")
+    await chooser.set_files([str(first_path), str(second_path)])
+    await expect(page.locator("#queue-count")).to_have_text("2")
+    await expect(page.locator("#choose-button")).to_be_focused()
+    await tab_to(
+        page, '#file-list li:last-child button[data-action="remove"]', expect, stops
+    )
+    await page.keyboard.press("Enter")
+    await expect(page.locator("#queue-count")).to_have_text("1")
+    await expect(page.locator("#choose-button")).to_be_focused()
+    await expect(page.locator("#file-list")).to_contain_text(first_path.name)
+    await tab_to(page, "#convert-button", expect, stops)
+    async with page.expect_response(
+        lambda r: urlsplit(r.url).path == "/api/jobs" and r.request.method == "POST"
+    ) as event:
+        await page.keyboard.press("Enter")
+    response = await event.value
+    require(response.status == 202, "Keyboard upload was not accepted")
+    payload = await response.json()
+    require(
+        len(payload["jobs"]) == 1 and not payload["errors"], "Keyboard queue mismatch"
+    )
+    job_id = payload["jobs"][0]["id"]
+    await expect(page.locator("#queue-count")).to_have_text("0")
+    await expect(page.locator("#download-button")).to_be_enabled(timeout=90000)
+    select = f'#history-list button[data-action="select"][data-id="{job_id}"]'
+    await tab_to(page, select, expect, stops)
+    await page.keyboard.press("Enter")
+    await expect(page.locator(select)).to_be_focused()
+    await expect(page.locator("#markdown-preview")).to_contain_text(FIRST_MARKER)
+    await tab_to(page, "#preview-tab", expect, stops)
+    await page.keyboard.press("ArrowRight")
+    await expect(page.locator("#source-tab")).to_be_focused()
+    await expect(page.locator("#source-tab")).to_have_attribute("aria-selected", "true")
+    await tab_to(page, "#markdown-source", expect, stops)
+    result = await api_ok(page, f"/api/jobs/{job_id}")
+    await expect(page.locator("#markdown-source")).to_have_value(result["markdown"])
+    await page.keyboard.press("Control+Home")
+    await tab_to(page, "#download-button", expect, stops)
+    md = await save_download(
+        page,
+        "#download-button",
+        "downloads/keyboard-result.md",
+        evidence,
+        keyboard=True,
+    )
+    require(
+        md.read_text(encoding="utf-8") == result["markdown"], "Keyboard MD bytes differ"
+    )
+    checkbox = f'#history-list input[data-action="archive"][data-id="{job_id}"]'
+    await tab_to(page, checkbox, expect, stops)
+    await page.keyboard.press("Space")
+    await expect(page.locator(checkbox)).to_be_checked()
+    await expect(page.locator(checkbox)).to_be_focused()
+    await tab_to(page, "#archive-button", expect, stops)
+    archive_file = await save_download(
+        page,
+        "#archive-button",
+        "downloads/keyboard-results.zip",
+        evidence,
+        keyboard=True,
+    )
+    with zipfile.ZipFile(archive_file) as archive:
+        names = archive.namelist()
+        require(
+            len(names) == 1 and names[0].endswith(".md"), "Keyboard ZIP contents differ"
+        )
+        require(
+            not Path(names[0]).is_absolute() and ".." not in Path(names[0]).parts,
+            "Unsafe keyboard ZIP member",
+        )
+        require(
+            archive.read(names[0]).decode("utf-8") == result["markdown"],
+            "Keyboard ZIP Markdown differs",
+        )
+    require(
+        (await api_ok(page, "/api/me"))["usage"]["used"] == before["usage"]["used"] + 1,
+        "Keyboard flow charged an unexpected quota",
+    )
+    await evidence.screenshot(page, "keyboard-export")
+    return {
+        "focus_stops": stops,
+        "input_method": "Tab/Enter/arrow/Space and keyboard text events",
+        "file_selection": "chooser triggered with Enter; fixture bytes injected with set_files; native dialog not accepted",
+        "screen_reader": "not tested",
+    }
 
 
 async def exercise(
@@ -576,6 +723,7 @@ async def exercise(
     user = await user_context.new_page()
     other = await other_context.new_page()
     first_path, second_path = write_fixtures(scratch)
+    keyboard_page = None
     try:
         with evidence.step(STEPS[1]):
             await admin.goto("/app")
@@ -583,7 +731,8 @@ async def exercise(
             await admin.keyboard.press("Tab")
             await expect(admin.locator(".skip-link")).to_be_focused()
             await admin.keyboard.press("Enter")
-            await admin.locator("#login-tab").focus()
+            await expect(admin.locator("#main-content")).to_be_focused()
+            await tab_to(admin, "#login-tab", expect, [])
             await admin.keyboard.press("End")
             await expect(admin.locator("#register-tab")).to_be_focused()
             await admin.keyboard.press("Home")
@@ -1068,11 +1217,28 @@ async def exercise(
                 not evidence.data["unexpected_external_requests"],
                 "Browser attempted external document network access",
             )
+        with evidence.step(STEPS[12]) as check:
+            keyboard_context = await new_context()
+            keyboard_page = await keyboard_context.new_page()
+            check["details"] = await keyboard_journey(
+                keyboard_page, first_path, second_path, evidence, expect
+            )
+            require(
+                not evidence.data["page_errors"], "Uncaught browser JavaScript error"
+            )
+            require(
+                not evidence.data["unexpected_external_requests"],
+                "Unexpected external request",
+            )
     except BaseException:
         # Preserve actual failure pixels, not a fabricated mock or DOM rendering.
-        for label, page in [("failure-admin", admin), ("failure-reader", user)]:
+        for label, page in [
+            ("failure-admin", admin),
+            ("failure-reader", user),
+            ("failure-keyboard", keyboard_page),
+        ]:
             try:
-                if not page.is_closed():
+                if page is not None and not page.is_closed():
                     await evidence.screenshot(page, label)
             except Exception as capture_error:
                 evidence.data.setdefault("capture_errors", []).append(
@@ -1196,6 +1362,33 @@ class HarnessSelfChecks(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(f"playwright=={PLAYWRIGHT_VERSION}", requirements)
+
+    def test_keyboard_journey_has_no_pointer_or_programmatic_focus_shortcuts(self):
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        for function in tree.body:
+            if isinstance(function, ast.AsyncFunctionDef) and function.name in {
+                "keyboard_journey",
+                "tab_to",
+            }:
+                shortcuts = {
+                    call.func.attr
+                    for call in ast.walk(function)
+                    if isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr
+                    in {
+                        "click",
+                        "dblclick",
+                        "fill",
+                        "focus",
+                        "check",
+                        "dispatch_event",
+                        "set_input_files",
+                    }
+                }
+                self.assertFalse(
+                    shortcuts, f"Keyboard journey has shortcuts: {shortcuts}"
+                )
 
     def test_checks_are_unique(self):
         self.assertEqual(len(STEPS), len(set(STEPS)))

@@ -32,21 +32,26 @@ class Classes {
   remove(name) { this.toggle(name, false); }
 }
 class Element {
-  constructor(tag, owner) { this.tagName = tag.toUpperCase(); this.owner = owner; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ""; this.classList = new Classes(this); this.listeners = {}; this._text = ""; this._html = ""; this.value = ""; this.checked = false; this.disabled = false; this.hidden = false; this.parent = null; }
+  constructor(tag, owner) { this.tagName = tag.toUpperCase(); this.owner = owner; this.children = []; this.dataset = {}; this.attributes = {}; this.className = ""; this.classList = new Classes(this); this.listeners = {}; this._text = ""; this.textMutations = 0; this._html = ""; this.value = ""; this.checked = false; this.disabled = false; this.hidden = false; this.parent = null; }
   append(...nodes) { for (let node of nodes) { if (typeof node === "string") { const text = new Element("text", this.owner); text.textContent = node; node = text; } if (node.tagName === "FRAGMENT") this.append(...node.children); else { node.parent = this; this.children.push(node); } } }
-  replaceChildren(...nodes) { this.children = []; this._text = ""; this._html = ""; this.append(...nodes); }
-  set textContent(value) { this._text = String(value); this.children = []; this._html = ""; }
+  // Static HTML IDs are connected roots in this small double. Dynamic descendants
+  // follow their parent chain; removing one must blur it just as a browser does.
+  get isConnected() { return !!this.connectedRoot || !!this.parent?.isConnected; }
+  contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
+  detachChildren() { for (const child of this.children) child.remove(); }
+  replaceChildren(...nodes) { this.detachChildren(); this._text = ""; this._html = ""; this.append(...nodes); }
+  set textContent(value) { this.textMutations += 1; this.detachChildren(); this._text = String(value); this._html = ""; }
   get textContent() { return this._text + this.children.map((node) => node.textContent).join(""); }
-  set innerHTML(value) { this._html = String(value); this._text = ""; this.children = []; }
+  set innerHTML(value) { this.detachChildren(); this._html = String(value); this._text = ""; }
   get innerHTML() { return this._html; }
   setAttribute(key, value) { this.attributes[key] = String(value); }
   getAttribute(key) { return this.attributes[key]; }
   addEventListener(kind, fn) { (this.listeners[kind] ??= []).push(fn); }
   emit(kind, options = {}) { for (const fn of this.listeners[kind] || []) fn({ target: this, preventDefault() {}, stopPropagation() {}, ...options }); }
   select() { this.selected = true; }
-  focus() { this.owner.activeElement = this; }
+  focus() { if (this.isConnected && !this.disabled) this.owner.activeElement = this; }
   click() { if (this.disabled) return; if (this.tagName === "A") this.owner.downloads.push({ href: this.href, download: this.download }); this.emit("click"); }
-  remove() { if (this.parent) this.parent.children = this.parent.children.filter((node) => node !== this); }
+  remove() { if (this.contains(this.owner.activeElement)) this.owner.activeElement = this.owner.body; if (this.parent) this.parent.children = this.parent.children.filter((node) => node !== this); this.parent = null; }
   matches(selector) {
     const tag = selector.match(/^[a-z]+/i)?.[0]; if (tag && this.tagName.toLowerCase() !== tag.toLowerCase()) return false;
     for (const match of selector.matchAll(/\[data-([a-z-]+)(?:="([^"]*)")?\]/g)) { const key = match[1].replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()); if (!(key in this.dataset) || (match[2] !== undefined && this.dataset[key] !== match[2])) return false; }
@@ -58,9 +63,9 @@ class Element {
 }
 function createApp({ origin = "https://workspace.example.com:8443", config = baseConfig, me = null, jobs = [], usage, routes = {}, clipboardFailure = false, clipboardWrite = null, legacyCopy = false } = {}) {
   const document = { activeElement: null, listeners: {}, downloads: [], addEventListener(kind, fn) { this.listeners[kind] = fn; }, createElement(tag) { return new Element(tag, this); }, createDocumentFragment() { return this.createElement("fragment"); } };
-  document.body = document.createElement("body"); document.execCommand = () => legacyCopy;
+  document.body = document.createElement("body"); document.body.connectedRoot = true; document.activeElement = document.body; document.execCommand = () => legacyCopy;
   const elements = {};
-  for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) { const node = document.createElement(match[1]); node.id = match[3]; node.hidden = /\bhidden\b/.test(match[2]); node.disabled = /\bdisabled\b/.test(match[2]); elements[node.id] = node; }
+  for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) { const node = document.createElement(match[1]); node.id = match[3]; node.connectedRoot = true; node.hidden = /\bhidden\b/.test(match[2]); node.disabled = /\bdisabled\b/.test(match[2]); elements[node.id] = node; }
   document.getElementById = (id) => { assert(elements[id], `Unknown HTML id: ${id}`); return elements[id]; };
   const window = { location: { origin }, listeners: {}, confirmations: [], confirmResult: true, confirm(text) { this.confirmations.push(text); return this.confirmResult; }, addEventListener(kind, fn) { this.listeners[kind] = fn; } };
   let time = NOW, timerId = 0; const timers = new Map(), urls = new Set(), revoked = [], requests = [], copies = [], abortControllers = [];
@@ -399,6 +404,71 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.add(file("remove.md")); const remove = app.ui("file-list").querySelector('[data-action="remove"]'); remove.focus(); app.ui("file-list").emit("click", { target: remove });
     assert.equal(app.document.activeElement, app.ui("choose-button")); app.stop();
   });
+  await test("DOM double blurs removed descendants and rejects detached or disabled focus", async () => {
+    const app = createApp(); await flush();
+    const row = app.document.createElement("div"), button = app.document.createElement("button");
+    row.append(button); app.document.body.append(row); button.focus(); assert.equal(app.document.activeElement, button);
+    app.document.body.replaceChildren(); assert.equal(app.document.activeElement, app.document.body); assert(!button.isConnected);
+    button.focus(); assert.equal(app.document.activeElement, app.document.body);
+    app.document.body.append(row); button.disabled = true; button.focus(); assert.equal(app.document.activeElement, app.document.body);
+    button.disabled = false; button.focus(); row.textContent = "Removed"; assert.equal(app.document.activeElement, app.document.body); app.stop();
+  });
+  await test("pending row cancel retry and delete keep connected same-row focus through success and failure", async () => {
+    for (const action of ["cancel", "retry", "delete"]) for (const succeeds of [false, true]) {
+      const mutation = deferred(), target = job("target", action === "retry" ? "failed" : "running");
+      const endpoint = `/api/jobs/target${action === "delete" ? "" : `/${action}`}`;
+      const app = createApp({ me: identity(), jobs: [job("first"), target], routes: { [`${action === "delete" ? "DELETE" : "POST"} ${endpoint}`]: () => mutation.promise } }); await flush();
+      const button = app.ui("history-list").querySelectorAll(`[data-action="${action}"]`).find((node) => node.dataset.id === "target");
+      button.focus(); app.ui("history-list").emit("click", { target: button });
+      assert.equal(app.document.activeElement.dataset.action, "select", `${action} pending focus should move to enabled View`);
+      assert.equal(app.document.activeElement.dataset.id, "target", `${action} pending focus should stay in the same row`);
+      assert(app.document.activeElement.isConnected); assert(!button.isConnected);
+      if (succeeds) app.state.jobs = action === "delete" ? [job("first")] : [job("first"), job("target", action === "retry" ? "queued" : "failed")];
+      mutation.resolve(succeeds ? response(action === "delete" ? { status: "deleted" } : app.state.jobs[1]) : response({ detail: "Synthetic failure" }, 503)); await flush();
+      assert(app.document.activeElement.isConnected); assert(!app.document.activeElement.disabled);
+      assert.equal(app.document.activeElement.dataset.action, "select");
+      assert.equal(app.document.activeElement.dataset.id, succeeds && action === "delete" ? "first" : "target"); app.stop();
+    }
+  });
+  await test("cancelled deletion retains focus and confirmed final deletion has an enabled fallback", async () => {
+    const deletion = deferred(); const app = createApp({ me: identity(), jobs: [job("only")], routes: { "DELETE /api/jobs/only": () => deletion.promise } }); await flush();
+    const button = app.ui("history-list").querySelector('[data-action="delete"]'); button.focus(); app.window.confirmResult = false;
+    app.history("delete"); assert.equal(app.calls("/api/jobs/only", "DELETE").length, 0); assert.equal(app.document.activeElement, button); assert(button.isConnected);
+    app.window.confirmResult = true; app.history("delete"); app.state.jobs = []; deletion.resolve(response({ status: "deleted" })); await flush();
+    assert.equal(app.document.activeElement, app.ui("filter-all")); assert(!app.document.activeElement.disabled); app.stop();
+  });
+  await test("pending row responses never reclaim focus after newer navigation or selection", async () => {
+    for (const action of ["cancel", "retry", "delete"]) for (const destination of ["navigation", "selection"]) for (const succeeds of [false, true]) {
+      const mutation = deferred(), endpoint = `/api/jobs/target${action === "delete" ? "" : `/${action}`}`;
+      const app = createApp({ me: identity(), jobs: [job("first"), job("target", action === "retry" ? "failed" : "running")], routes: { [`${action === "delete" ? "DELETE" : "POST"} ${endpoint}`]: () => mutation.promise, "GET /api/jobs/first": () => response(detail(job("first"))) } }); await flush();
+      const button = app.ui("history-list").querySelectorAll(`[data-action="${action}"]`).find((node) => node.dataset.id === "target"); button.focus(); app.ui("history-list").emit("click", { target: button });
+      if (destination === "navigation") { app.ui("nav-history").focus(); app.ui("nav-history").click(); }
+      else { const newer = app.ui("history-list").querySelector('[data-action="select"]'); newer.focus(); app.history("select"); await flush(); }
+      app.state.jobs = action === "delete" ? [job("first")] : [job("first"), job("target", action === "retry" ? "queued" : "failed")];
+      mutation.resolve(succeeds ? response(action === "delete" ? { status: "deleted" } : app.state.jobs[1]) : response({ detail: "Synthetic failure" }, 503)); await flush();
+      assert(app.document.activeElement.isConnected);
+      if (destination === "navigation") assert.equal(app.document.activeElement, app.ui("nav-history"));
+      else { assert.equal(app.document.activeElement.dataset.id, "first"); assert.equal(app.ui("document-name").textContent, "file-first.md"); }
+      app.stop();
+    }
+  });
+  await test("unchanged polls do not mutate passive live text and real changes remain announced", async () => {
+    const regions = ["deployment-notice", "quota-summary", "workspace-status", "engine-selection-note", "conversion-summary", "history-note"];
+    const app = createApp({ me: identity(), jobs: [job("active", "running")], config: enhancedConfig }); await flush();
+    const before = Object.fromEntries(regions.map((id) => [id, app.ui(id).textMutations]));
+    await app.advance(4000);
+    assert(app.calls("/api/jobs").length >= 3);
+    for (const id of regions) assert.equal(app.ui(id).textMutations, before[id], `${id} received identical live text on unchanged polls`);
+    app.state.jobs = [job("active")]; app.state.usage = { ...app.state.usage, used: 1, remaining: 19 };
+    await app.advance(2000); assert.equal(app.ui("quota-summary").textMutations, before["quota-summary"] + 1); assert.equal(app.ui("workspace-status").textMutations, before["workspace-status"] + 1);
+    app.add(file("announce.pdf")); assert.equal(app.ui("conversion-summary").textMutations, before["conversion-summary"] + 1);
+    app.ui("engine-docling").emit("change"); assert.equal(app.ui("engine-selection-note").textMutations, before["engine-selection-note"] + 1);
+    app.state.routes["GET /api/jobs"] = () => response({ detail: "Offline" }, 503); app.ui("refresh-button").click(); await flush();
+    assert.equal(app.ui("history-note").textMutations, before["history-note"] + 1); assert(app.ui("history-note").textContent.includes("Offline"));
+    app.ui("refresh-button").click(); await flush(); assert.equal(app.ui("history-note").textMutations, before["history-note"] + 1);
+    delete app.state.routes["GET /api/jobs"]; app.ui("refresh-button").click(); await flush(); assert.equal(app.ui("history-note").textMutations, before["history-note"] + 2);
+    app.state.config = { ...enhancedConfig, deployment_mode: "production" }; app.ui("reconnect-button").click(); await flush(); assert(app.ui("deployment-notice").textContent.includes("生产隔离")); app.stop();
+  });
   await test("drag/drop accepts files, clears nested drag highlight and ignores busy drops", async () => {
     const upload = deferred(); const app = createApp({ me: identity(), routes: { "POST /api/jobs": () => upload.promise } }); await flush();
     app.ui("drop-zone").emit("dragenter"); app.ui("drop-zone").emit("dragenter"); app.ui("drop-zone").emit("dragleave"); assert(app.ui("drop-zone").className.includes("drag-over"));
@@ -407,6 +477,7 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     assert.equal(app.ui("drop-zone").getAttribute("aria-disabled"), "true"); app.stop(); upload.resolve(response({ jobs: [], errors: [] }, 202)); await flush();
   });
   await test("HTML and CSS provide native engine semantics, mobile targets and reduced-motion paths", async () => {
+    assert(/<main[^>]*id="main-content"[^>]*tabindex="-1"/.test(html));
     assert(/<fieldset[^>]*id="engine-group"/.test(html)); assert(/<legend>选择转换引擎<\/legend>/.test(html));
     assert(/id="engine-docling"[^>]*type="radio"[^>]*name="engine"/.test(html));
     assert(/id="engine-docling"[^>]*aria-describedby="engine-description-docling engine-limit-docling"/.test(html));

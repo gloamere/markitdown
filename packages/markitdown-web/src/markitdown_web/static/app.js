@@ -35,6 +35,9 @@
   }
   function stale(error) { return error instanceof StaleResponse || error.name === "AbortError"; }
   function message(error) { return error instanceof TypeError ? "无法连接服务，请检查网络后重试。" : error.message || "操作未完成，请重试。"; }
+  // Passive live regions describe current state. Identical poll results must not
+  // replace their text nodes; explicit action announcements remain separate.
+  function statusText(id, text) { if (ui[id].textContent !== text) ui[id].textContent = text; }
   function notice(text) { ui.notice.textContent = text; ui.notice.hidden = !text; }
   function announce(text) { ui["action-status"].textContent = text; }
   function authMessage(text, error = false) { ui["auth-message"].textContent = text; ui["auth-message"].classList.toggle("is-error", error); }
@@ -171,8 +174,8 @@
     for (const id of ["setting-daily-quota", "setting-file-mib", "setting-retention-hours"]) ui[id].value = "";
     ui["user-defaults"].textContent = "正在读取系统默认值…"; ui["audit-note"].textContent = "管理审计保留规则独立于文件有效期";
     for (const id of ["setting-quota-help", "setting-file-help", "setting-retention-help"]) ui[id].textContent = "";
-    ui["account-retention"].textContent = ""; ui["account-name"].textContent = ""; ui["account-role"].textContent = ""; ui["quota-summary"].textContent = ""; ui["quota-reset"].textContent = "";
-    ui["history-note"].textContent = "仅展示当前账户最近 100 条记录"; clearInvite(); adminMessage(""); notice(""); announce(""); render();
+    ui["account-retention"].textContent = ""; ui["account-name"].textContent = ""; ui["account-role"].textContent = ""; statusText("quota-summary", ""); ui["quota-reset"].textContent = "";
+    statusText("history-note", "仅展示当前账户最近 100 条记录"); clearInvite(); adminMessage(""); notice(""); announce(""); render();
   }
 
   function sessionChanged(text) {
@@ -213,7 +216,7 @@
 
   function renderAuth() {
     renderNavigation();
-    ui["deployment-notice"].textContent = config.deployment_mode === "production" ? "生产隔离配置：能力验证失败的引擎会拒绝解析；是否已完成主机验收请向运营者确认" : "本地开发评估模式：没有完整生产文件系统隔离，请仅使用可信或合成测试文件";
+    statusText("deployment-notice", config.deployment_mode === "production" ? "生产隔离配置：能力验证失败的引擎会拒绝解析；是否已完成主机验收请向运营者确认" : "本地开发评估模式：没有完整生产文件系统隔离，请仅使用可信或合成测试文件");
     ui["auth-section"].hidden = !!session; ui["session-section"].hidden = !session;
     ui["bootstrap-notice"].hidden = !ready || config.has_admin;
     const disabled = !ready || !config.has_admin || authBusy || logoutToken !== null;
@@ -226,7 +229,7 @@
     ui["auth-retention"].textContent = `新任务文件有效期：入队起 ${retention()}，排队和运行也占用有效期`;
     if (session) {
       ui["account-name"].textContent = session.user.username; ui["account-role"].textContent = session.user.is_admin ? "管理员" : "成员";
-      ui["quota-summary"].textContent = usage ? `今日已用 ${usage.used} / ${usage.daily_quota} · 剩余 ${usage.remaining} 个文件 · ${usage.active_jobs || 0} 项处理中` : "正在读取额度…";
+      statusText("quota-summary", usage ? `今日已用 ${usage.used} / ${usage.daily_quota} · 剩余 ${usage.remaining} 个文件 · ${usage.active_jobs || 0} 项处理中` : "正在读取额度…");
       ui["quota-reset"].textContent = usage ? `每日 UTC 00:00 重置 · 下次 ${utc(usage.resets_at)} · ${localTime(usage.resets_at)}` : "每日额度按 UTC 重置";
       ui["account-retention"].textContent = `新任务：入队起 ${retention()} · 已有任务以各自到期时间为准 · 账户单文件上限 ${bytes(usage?.max_file_bytes || session.user.max_file_bytes)}`;
     }
@@ -253,7 +256,7 @@
     ui["file-list"].setAttribute("aria-busy", String(uploadBusy));
     ui["drop-zone"].setAttribute("aria-disabled", String(unavailable));
     ui["upload-progress"].hidden = !uploadBusy; ui["upload-recheck"].hidden = !uploadUncertain;
-    ui["conversion-summary"].textContent = uploadBusy ? "正在等待服务接收，完成后自动进入转换记录" : uploadUncertain ? "上传结果尚未确认。安全重试会沿用同一请求编号，不重复创建任务或计次" : usage?.remaining === 0 ? "今日额度已用完，请等待 UTC 重置" : `本次 ${pending.filter((entry) => !entry.error).length} 个可提交文件，最多使用同等次数额度；上传与重试入队均计次`;
+    statusText("conversion-summary", uploadBusy ? "正在等待服务接收，完成后自动进入转换记录" : uploadUncertain ? "上传结果尚未确认。安全重试会沿用同一请求编号，不重复创建任务或计次" : usage?.remaining === 0 ? "今日额度已用完，请等待 UTC 重置" : `本次 ${pending.filter((entry) => !entry.error).length} 个可提交文件，最多使用同等次数额度；上传与重试入队均计次`);
     ui["upload-limits"].textContent = `最多 ${config.max_files} 个文件 · 单个 ${bytes(fileLimit())} · 总计 ${bytes(config.max_total_bytes)}`;
   }
 
@@ -268,7 +271,7 @@
       ui[`engine-limit-${id}`].textContent = id === "docling" ? `仅文字型 PDF · 最多 ${info.max_pages} 页 / ${bytes(info.max_file_bytes)} · 最长 ${info.timeout_seconds} 秒 · OCR 关闭${info.available ? "" : `\n${info.reason}`}` : `无 2 页硬门槛 · 单文件 ${bytes(info.max_file_bytes)} · 最长 ${info.timeout_seconds} 秒 · OCR 关闭${info.available ? "" : `\n${info.reason}`}`;
     }
     ui["engine-group"].setAttribute("aria-busy", String(uploadBusy));
-    ui["engine-selection-note"].textContent = !selected.available ? selected.reason : selectedEngine === "docling" ? `此批全部使用 Docling；整份超出 ${selected.max_pages} 页会拒绝处理，不会只转换前两页。OCR、代码/公式/图片/图表扩展关闭。实际大小仍取账号与引擎上限中更低的值。` : "此批全部使用 MarkItDown，无 2 页限制；长文档质量仍需核对。重试沿用原引擎，使用当前可用配置，不静默切换引擎。";
+    statusText("engine-selection-note", !selected.available ? selected.reason : selectedEngine === "docling" ? `此批全部使用 Docling；整份超出 ${selected.max_pages} 页会拒绝处理，不会只转换前两页。OCR、代码/公式/图片/图表扩展关闭。实际大小仍取账号与引擎上限中更低的值。` : "此批全部使用 MarkItDown，无 2 页限制；长文档质量仍需核对。重试沿用原引擎，使用当前可用配置，不静默切换引擎。");
     const extensions = selectedEngine === "docling" ? config.extensions.filter((value) => value === ".pdf") : config.extensions;
     ui["file-input"].accept = extensions.join(",");
     ui["format-list"].replaceChildren(...extensions.map((value) => element("span", "", value.slice(1).toUpperCase())));
@@ -304,7 +307,7 @@
     ui["refresh-button"].textContent = jobsBusy ? "刷新中…" : "刷新";
     ui["history-list"].setAttribute("aria-busy", String(jobsBusy));
     const active = jobs.filter(isActive).length, done = jobs.filter((job) => status(job) === "succeeded").length, failed = jobs.filter((job) => ["failed", "expired"].includes(status(job))).length;
-    ui["workspace-status"].textContent = jobs.length ? `${active} 项处理中 · ${done} 项已完成${failed ? ` · ${failed} 项需处理` : ""}` : "添加文件，开始整理";
+    statusText("workspace-status", jobs.length ? `${active} 项处理中 · ${done} 项已完成${failed ? ` · ${failed} 项需处理` : ""}` : "添加文件，开始整理");
     for (const [id, label, count] of [["all", "全部", jobs.length], ["active", "处理中", active], ["completed", "已完成", done], ["failed", "需处理", failed]]) { ui[`filter-${id}`].textContent = `${label} ${count}`; ui[`filter-${id}`].setAttribute("aria-pressed", String(historyFilter === id)); }
     ui["archive-button"].disabled = !archiveIds.size || archiveBusy; ui["archive-button"].textContent = archiveBusy ? "正在打包…" : "下载 ZIP";
     ui["archive-count"].textContent = archiveIds.size ? `已选择 ${archiveIds.size} / 10 个文件` : "勾选已完成文件，最多 10 个";
@@ -359,9 +362,12 @@
     if (focusedAction && focusedId) {
       const replacement = [...ui["history-list"].querySelectorAll("[data-action]"), ...ui["file-list"].querySelectorAll("[data-action]")].find((node) => node.dataset.action === focusedAction && node.dataset.id === focusedId);
       if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true });
-      else if (!replacement && session) {
-        const fallback = focusedAction === "remove" ? ui["choose-button"] : ui["history-list"].querySelector('[data-action="select"]') || ui["refresh-button"];
-        if (!fallback.disabled) fallback.focus({ preventScroll: true });
+      else if (session) {
+        // Pending actions rebuild their button disabled. Keep focus in the same
+        // row where possible; never retain the removed node or a delayed target.
+        const views = [...ui["history-list"].querySelectorAll('[data-action="select"]')];
+        const candidates = focusedAction === "remove" ? [ui["choose-button"], ui[`engine-${selectedEngine}`]] : [views.find((node) => node.dataset.id === focusedId), ...views, ui["refresh-button"], ui[`filter-${historyFilter}`]];
+        candidates.find((node) => node && !node.disabled)?.focus({ preventScroll: true });
       }
     }
   }
@@ -402,8 +408,8 @@
       if (!selected) { selectedId = null; clearDocument(); }
       else if (status(selected) !== "succeeded") clearDocument();
       else if (!selectedDocument && !detailLoading && !detailError) void selectJob(selectedId);
-      ui["history-note"].textContent = `仅展示当前账户最近 100 条记录 · 新任务入队起 ${retention()}；历史可能在文件到期后继续保留${config.history_seconds ? ` ${Math.round(config.history_seconds / 86400)} 天` : ""}`;
-    } catch (error) { if (!stale(error) && epoch === currentEpoch && seq === jobsSequence) ui["history-note"].textContent = `暂未刷新：${message(error)}`; }
+      statusText("history-note", `仅展示当前账户最近 100 条记录 · 新任务入队起 ${retention()}；历史可能在文件到期后继续保留${config.history_seconds ? ` ${Math.round(config.history_seconds / 86400)} 天` : ""}`);
+    } catch (error) { if (!stale(error) && epoch === currentEpoch && seq === jobsSequence) statusText("history-note", `暂未刷新：${message(error)}`); }
     finally { if (seq === jobsSequence && epoch === currentEpoch) { jobsBusy = false; render(); scheduleTimers(); } }
   }
 
