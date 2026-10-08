@@ -27,7 +27,12 @@
   let pollTimer = null, expiryTimer = null, dragDepth = 0, adminSequence = 0, adminBusy = false, inviteBusy = false, sessionRefreshBusy = false;
   const controllers = new Set(), objectUrls = new Set(), archiveIds = new Set(), jobMutations = new Set(), retryIntents = new Map();
 
+  // Network/admission deadlines are separate from the 45/60 s conversion limits.
+  const REQUEST_TIMEOUT_MS = 30000, TRANSFER_TIMEOUT_MS = 180000;
   class StaleResponse extends Error {}
+  class RequestTimeout extends Error {
+    constructor() { super("请求超时，结果尚未确认。请检查网络并刷新核对状态。"); this.name = "RequestTimeout"; }
+  }
   function stale(error) { return error instanceof StaleResponse || error.name === "AbortError"; }
   function message(error) { return error instanceof TypeError ? "无法连接服务，请检查网络后重试。" : error.message || "操作未完成，请重试。"; }
   function notice(text) { ui.notice.textContent = text; ui.notice.hidden = !text; }
@@ -41,7 +46,11 @@
     const date = new Date(Number(value) * 1000);
     return Number.isFinite(date.getTime()) ? `${date.toLocaleString("zh-CN", { hour12: false, timeZoneName: "short" })}（本地）` : "本地时间未知";
   }
-  function duration(seconds) { return Number.isFinite(Number(seconds)) ? `${Number((Number(seconds) / 3600).toFixed(2))} 小时` : "由服务决定"; }
+  function duration(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return "由服务决定";
+    const hours = Number((seconds / 3600).toFixed(2));
+    return hours > 0 ? `${hours} 小时` : "不足 0.01 小时";
+  }
   function retention() { return duration(config.retention_seconds); }
   function attemptLimit() { return Number.isSafeInteger(usage?.max_attempts) && usage.max_attempts > 0 ? usage.max_attempts : 3; }
   function adoptUsage(value) {
@@ -81,36 +90,66 @@
   function revokeUrls() { for (const url of objectUrls) URL.revokeObjectURL(url); objectUrls.clear(); }
   function clearInvite() { copySequence += 1; ui["new-invite-token"].value = ""; ui["invite-expiry"].textContent = ""; ui["invite-result"].hidden = true; ui["invite-create"].disabled = inviteBusy; }
 
-  async function request(path, { method = "GET", body, auth = true, signal, blob = false, idempotencyKey } = {}) {
-    const requestEpoch = epoch;
-    const controller = new AbortController();
-    controllers.add(controller);
+  async function boundedRequest(operation, { signal, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+    const requestEpoch = epoch, controller = new AbortController();
+    let timedOut = false, timer, rejectInterrupted;
+    const interrupted = new Promise((_, reject) => { rejectInterrupted = reject; });
+    const checkCurrent = () => {
+      if (requestEpoch !== epoch) throw new StaleResponse();
+      if (timedOut) throw new RequestTimeout();
+      if (controller.signal.aborted) throw new StaleResponse();
+    };
+    const abort = () => { clearTimeout(timer); rejectInterrupted(new StaleResponse()); };
     const relayAbort = () => controller.abort();
+    controllers.add(controller);
+    controller.signal.addEventListener("abort", abort, { once: true });
+    timer = setTimeout(() => {
+      timedOut = true;
+      // Reject before aborting so timeout is recoverable, not a silent cancellation.
+      rejectInterrupted(new RequestTimeout()); controller.abort();
+    }, timeoutMs);
     if (signal) { if (signal.aborted) controller.abort(); else signal.addEventListener("abort", relayAbort, { once: true }); }
+    try {
+      // Race the entire operation: a stalled fetch/body may ignore AbortSignal.
+      const result = await Promise.race([interrupted, (async () => { checkCurrent(); return operation(controller.signal, checkCurrent); })()]);
+      checkCurrent();
+      return result;
+    } finally {
+      clearTimeout(timer); controllers.delete(controller);
+      controller.signal.removeEventListener("abort", abort);
+      if (signal) signal.removeEventListener("abort", relayAbort);
+    }
+  }
+
+  async function request(path, { method = "GET", body, auth = true, signal, blob = false, idempotencyKey, timeoutMs } = {}) {
     const headers = {};
     if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
     if (method !== "GET") headers["X-MarkItDown-Request"] = "1";
     if (auth && method !== "GET") headers["X-CSRF-Token"] = session?.csrf_token || "";
     if (body && !(body instanceof FormData)) { headers["Content-Type"] = "application/json"; body = JSON.stringify(body); }
-    try {
-      const response = await fetch(path, { method, body, headers, credentials: "same-origin", cache: "no-store", signal: controller.signal });
-      if (requestEpoch !== epoch || controller.signal.aborted) throw new StaleResponse();
+    return boundedRequest(async (requestSignal, checkCurrent) => {
+      const response = await fetch(path, { method, body, headers, credentials: "same-origin", cache: "no-store", signal: requestSignal });
+      checkCurrent();
       const responseUser = response.headers.get("X-MarkItDown-User");
       if (auth && session && ((responseUser !== null && responseUser !== String(session.user.id)) || (response.ok && responseUser === null))) {
         sessionChanged("账户状态已变化，请重新连接以确认当前登录账户。");
         throw new StaleResponse();
       }
+      if (response.status === 401 && auth && session) {
+        // Unauthorized headers are enough to clear private state; never wait on a body.
+        resetSession(); authMessage("登录已失效，请重新登录。", true);
+        throw new StaleResponse();
+      }
       if (!response.ok) {
         let data = {}; try { data = await response.json(); } catch { /* Keep a useful status if the response is not JSON. */ }
-        if (requestEpoch !== epoch || controller.signal.aborted) throw new StaleResponse();
+        checkCurrent();
         const error = new Error(typeof data.detail === "string" ? data.detail : `请求未完成（${response.status}）`); error.status = response.status; error.code = data.code || data.error_code;
-        if (response.status === 401 && auth && session) { resetSession(); authMessage("登录已失效，请重新登录。", true); }
         throw error;
       }
       const result = blob ? await response.blob() : await response.json();
-      if (requestEpoch !== epoch || controller.signal.aborted) throw new StaleResponse();
+      checkCurrent();
       return result;
-    } finally { controllers.delete(controller); if (signal) signal.removeEventListener("abort", relayAbort); }
+    }, { signal, timeoutMs });
   }
 
   function resetSession() {
@@ -401,7 +440,7 @@
     const currentEpoch = epoch; uploadBusy = true; jobsSequence += 1; jobsBusy = false; clearTimeout(pollTimer); notice(""); render();
     const form = new FormData(); form.append("engine", uploadPayload.engine); for (const entry of entries) form.append("files", entry.file);
     try {
-      const data = await request("/api/jobs", { method: "POST", body: form, idempotencyKey: uploadKey });
+      const data = await request("/api/jobs", { method: "POST", body: form, idempotencyKey: uploadKey, timeoutMs: TRANSFER_TIMEOUT_MS });
       if (!Array.isArray(data.jobs) || !Array.isArray(data.errors)) throw new Error("上传响应不完整。请安全重试同一批请求以取回接收结果。");
       jobsSequence += 1; jobsBusy = false;
       const ids = new Set(entries.map((entry) => entry.id));
@@ -473,7 +512,7 @@
     if (!selected.length || selected.length > 10) return;
     const currentEpoch = epoch; archiveBusy = true; render();
     try {
-      const blob = await request("/api/jobs/archive", { method: "POST", body: { job_ids: selected }, blob: true });
+      const blob = await request("/api/jobs/archive", { method: "POST", body: { job_ids: selected }, blob: true, timeoutMs: TRANSFER_TIMEOUT_MS });
       const url = URL.createObjectURL(blob); objectUrls.add(url); downloadLink(url, "markitdown-results.zip");
       setTimeout(() => { URL.revokeObjectURL(url); objectUrls.delete(url); }, 1000); announce("ZIP 下载已准备好");
     } catch (error) { if (!stale(error) && epoch === currentEpoch) notice(message(error)); }
@@ -526,16 +565,22 @@
     if (logoutToken === null || logoutBusy) return;
     const token = logoutToken, expectedUser = logoutUserId, currentEpoch = epoch; logoutBusy = true; renderAuth();
     try {
-      const response = await fetch("/api/auth/logout", { method: "POST", headers: { "X-MarkItDown-Request": "1", "X-CSRF-Token": token }, credentials: "same-origin", cache: "no-store" });
+      const accountChanged = await boundedRequest(async (signal, checkCurrent) => {
+        const response = await fetch("/api/auth/logout", { method: "POST", headers: { "X-MarkItDown-Request": "1", "X-CSRF-Token": token }, credentials: "same-origin", cache: "no-store", signal });
+        checkCurrent();
+        const responseUser = response.headers.get("X-MarkItDown-User");
+        if (response.status === 403 || (responseUser !== null && responseUser !== expectedUser)) return true;
+        if (!response.ok && response.status !== 401) throw new Error("退出尚未由服务确认，请重试退出。");
+        if (response.ok) { await response.json(); checkCurrent(); }
+        return false;
+      });
       if (epoch !== currentEpoch) return;
-      const responseUser = response.headers.get("X-MarkItDown-User");
-      if (response.status === 403 || (responseUser !== null && responseUser !== expectedUser)) {
+      if (accountChanged) {
         sessionChanged("其他页面可能已切换账户。页面内容已清空，请重新连接确认当前账户后再退出。");
         return;
       }
-      if (!response.ok && response.status !== 401) throw new Error("退出尚未由服务确认，请重试退出。");
       logoutToken = logoutUserId = null; authMessage("已退出登录，页面中的文件与结果已清空。");
-    } catch { if (epoch === currentEpoch) authMessage("页面已清空，但服务尚未确认退出。请重试退出，尤其是在共用电脑上。", true); }
+    } catch (error) { if (!stale(error) && epoch === currentEpoch) authMessage("页面已清空，但服务尚未确认退出。请重试退出，尤其是在共用电脑上。", true); }
     finally { if (epoch === currentEpoch) { logoutBusy = false; renderAuth(); } }
   }
   function logout() { if (!session) return; const token = session.csrf_token, userId = String(session.user.id); resetSession(); logoutToken = token; logoutUserId = userId; authMode = "login"; authMessage("正在退出登录…"); renderAuth(); void finishLogout(); }

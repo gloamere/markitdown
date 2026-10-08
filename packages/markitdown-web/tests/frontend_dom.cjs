@@ -21,7 +21,7 @@ const identity = (user = {}) => ({ user: { ...baseUser, ...user }, csrf_token: `
 const job = (id, status = "succeeded", extra = {}) => ({ id, filename: `file-${id}.md`, status, size_bytes: 40, attempts: 1, created_at: NOW / 1000, expires_at: NOW / 1000 + 86400, error: null, ...extra });
 const detail = (item, text = "# Fresh") => ({ ...item, markdown: text, html: `<p>${text}</p>` });
 const response = (data, status = 200, userId = "u1") => ({ headers: { get: (name) => name === "X-MarkItDown-User" ? userId : null }, ok: status >= 200 && status < 300, status, json: async () => data, blob: async () => data instanceof Blob ? data : new Blob([String(data)]) });
-const deferred = () => { let resolve; const promise = new Promise((done) => { resolve = done; }); return { promise, resolve }; };
+const deferred = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const flush = async () => { await new Promise((done) => setImmediate(done)); await new Promise((done) => setImmediate(done)); };
 const file = (name, size = 12, lastModified = 1) => ({ name, size, lastModified });
 
@@ -63,7 +63,15 @@ function createApp({ origin = "https://workspace.example.com:8443", config = bas
   for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) { const node = document.createElement(match[1]); node.id = match[3]; node.hidden = /\bhidden\b/.test(match[2]); node.disabled = /\bdisabled\b/.test(match[2]); elements[node.id] = node; }
   document.getElementById = (id) => { assert(elements[id], `Unknown HTML id: ${id}`); return elements[id]; };
   const window = { location: { origin }, listeners: {}, confirmations: [], confirmResult: true, confirm(text) { this.confirmations.push(text); return this.confirmResult; }, addEventListener(kind, fn) { this.listeners[kind] = fn; } };
-  let time = NOW, timerId = 0; const timers = new Map(), urls = new Set(), revoked = [], requests = [], copies = [];
+  let time = NOW, timerId = 0; const timers = new Map(), urls = new Set(), revoked = [], requests = [], copies = [], abortControllers = [];
+  class TrackedAbortController extends AbortController {
+    constructor() {
+      super(); this.abortListeners = new Set(); abortControllers.push(this);
+      const add = this.signal.addEventListener.bind(this.signal), remove = this.signal.removeEventListener.bind(this.signal);
+      this.signal.addEventListener = (kind, fn, options) => { if (kind === "abort") this.abortListeners.add(fn); add(kind, fn, options); };
+      this.signal.removeEventListener = (kind, fn, options) => { if (kind === "abort") this.abortListeners.delete(fn); remove(kind, fn, options); };
+    }
+  }
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [time])); } static now() { return time; } }
   class FormData { constructor() { this.parts = []; } append(...values) { this.parts.push(values); } }
   const state = { config, me, jobs, usage: usage || me?.usage || identity().usage, routes };
@@ -79,9 +87,9 @@ function createApp({ origin = "https://workspace.example.com:8443", config = bas
     if (key === "POST /api/auth/logout") { state.me = null; return response({ status: "ok" }); }
     throw new Error(`Unexpected fetch: ${key}`);
   };
-  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController, TextEncoder, crypto: require("node:crypto").webcrypto, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => { if (clipboardWrite) return clipboardWrite(text); if (clipboardFailure) throw new Error("Permission denied"); copies.push(text); } } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
+  vm.runInNewContext(script, { document, window, fetch, FormData, Blob, AbortController: TrackedAbortController, TextEncoder, crypto: require("node:crypto").webcrypto, Date: FakeDate, URL: { createObjectURL() { const url = `blob:test-${++timerId}`; urls.add(url); return url; }, revokeObjectURL(url) { urls.delete(url); revoked.push(url); } }, navigator: { clipboard: { writeText: async (text) => { if (clipboardWrite) return clipboardWrite(text); if (clipboardFailure) throw new Error("Permission denied"); copies.push(text); } } }, setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay, delay }); return id; }, clearTimeout(id) { timers.delete(id); }, console });
   const ui = (id) => elements[id];
-  return { state, ui, document, window, timers, urls, revoked, requests, copies,
+  return { state, ui, document, window, timers, urls, revoked, requests, copies, abortControllers,
     async advance(ms) { const target = time + ms; let guard = 0; while (true) { const due = [...timers].filter(([, value]) => value.at <= target).sort((a, b) => a[1].at - b[1].at)[0]; if (!due) break; assert(++guard < 100, "Timer busy loop"); time = due[1].at; timers.delete(due[0]); due[1].fn(); await flush(); } time = target; },
     add(...files) { ui("file-input").files = files; ui("file-input").emit("change"); },
     history(action, index = 0) { const button = ui("history-list").querySelectorAll(`[data-action="${action}"]`)[index]; assert(button, `Missing history action ${action}`); ui("history-list").emit("click", { target: button }); return button; },
@@ -592,6 +600,158 @@ async function test(name, fn) { await fn(); scenarios.push(name); }
     app.ui("new-invite-token").value = "synthetic-token"; app.ui("invite-result").hidden = false;
     app.ui("nav-workspace").click(); assert(app.ui("admin-panel").hidden); assert(!app.ui("workspace").hidden); assert(!app.ui("upload-section").hidden); assert.equal(app.ui("new-invite-token").value, ""); assert.equal(app.ui("markdown-source").value, "# Navigation result");
     app.ui("logout-button").click(); await flush(); assert(app.ui("nav-workspace").disabled); assert(app.ui("nav-history").disabled); assert(app.ui("admin-panel").hidden); assert.equal(app.ui("markdown-source").value, ""); app.stop();
+  });
+
+  // These deadlines cover headers and body, even when the transport ignores abort.
+  for (const stage of ["headers", "JSON body", "error JSON body"]) {
+    await test(`request deadline releases hanging config ${stage} and ignores late success`, async () => {
+      const late = deferred();
+      const app = createApp({ routes: { "GET /api/config": () => stage === "headers" ? late.promise : { ...response({}, stage === "error JSON body" ? 503 : 200), json: () => late.promise } } });
+      await flush(); await app.advance(29999); assert(app.ui("reconnect-button").disabled);
+      await app.advance(1); assert(!app.ui("reconnect-button").disabled); assert(app.ui("connection-message").textContent.includes("超时"));
+      assert(app.calls("/api/config")[0].options.signal.aborted); assert.equal(app.timers.size, 0);
+      delete app.state.routes["GET /api/config"]; app.state.config = { ...baseConfig, retention_seconds: 7200 };
+      app.ui("reconnect-button").click(); await flush(); assert(app.ui("connection-notice").hidden);
+      late.resolve(stage === "headers" ? response(baseConfig) : baseConfig); await flush();
+      assert(app.ui("auth-retention").textContent.includes("2 小时")); assert(app.ui("connection-notice").hidden);
+      assert.equal(app.calls("/api/config").length, 2); app.stop();
+    });
+  }
+  await test("request deadline is shared by headers and body rather than restarted on progress", async () => {
+    const headers = deferred(), body = deferred(), app = createApp({ routes: { "GET /api/config": () => headers.promise } }); await flush();
+    await app.advance(25000); headers.resolve({ ...response(baseConfig), json: () => body.promise }); await flush(); await app.advance(4999); assert(app.ui("reconnect-button").disabled);
+    await app.advance(1); assert(!app.ui("reconnect-button").disabled); assert(app.ui("connection-message").textContent.includes("超时"));
+    body.reject(new Error("Late body failure")); await flush(); assert(app.ui("connection-message").textContent.includes("超时")); app.stop();
+  });
+  await test("cooperative fetch AbortError still reports timeout rather than silent cancellation", async () => {
+    const app = createApp({ routes: { "GET /api/config": ({ signal }) => new Promise((_, reject) => {
+      const abort = () => { signal.removeEventListener("abort", abort); reject(new DOMException("Transport aborted", "AbortError")); };
+      signal.addEventListener("abort", abort, { once: true });
+    }) } }); await flush(); await app.advance(30000);
+    assert(app.ui("connection-message").textContent.includes("超时")); assert(!app.ui("reconnect-button").disabled); assert.equal(app.timers.size, 0); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0)); app.stop();
+  });
+  await test("request deadline bounds session bootstrap and permits explicit reconnect", async () => {
+    const late = deferred(), app = createApp({ routes: { "GET /api/me": () => late.promise } }); await flush();
+    await app.advance(30000); assert(!app.ui("reconnect-button").disabled); assert(app.ui("auth-message").textContent.includes("超时")); assert(!app.ui("login-button").disabled);
+    delete app.state.routes["GET /api/me"]; app.state.me = identity({ id: "u2", username: "other" }); app.ui("reconnect-button").click(); await flush();
+    late.resolve(response(identity())); await flush(); assert.equal(app.ui("account-name").textContent, "other"); app.stop();
+  });
+  await test("request deadline bounds login without automatically repeating authentication", async () => {
+    const late = deferred(), app = createApp({ routes: { "POST /api/auth/login": () => ({ ...response(identity()), json: () => late.promise }) } }); await flush();
+    app.login(); await flush(); await app.advance(30000); assert(!app.ui("login-button").disabled); assert(app.ui("auth-message").textContent.includes("超时")); assert(app.ui("session-section").hidden);
+    assert.equal(app.calls("/api/auth/login").length, 1); late.resolve(identity()); await flush(); assert(app.ui("session-section").hidden); app.stop();
+  });
+  for (const stage of ["headers", "JSON body", "error JSON body"]) {
+    await test(`request deadline recovers detail ${stage} and rejects late identity changes`, async () => {
+      const late = deferred(), item = job("deadline"), app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/deadline": () => stage === "headers" ? late.promise : { ...response({}, stage === "error JSON body" ? 403 : 200), json: () => late.promise } } }); await flush();
+      app.history("select"); await flush(); await app.advance(30000); assert(!app.ui("document-reload").hidden); assert(app.ui("empty-description").textContent.includes("超时")); assert(!app.ui("session-section").hidden);
+      app.state.routes["GET /api/jobs/deadline"] = () => response(detail(item, "FRESH")); app.ui("document-reload").click(); await flush();
+      late.resolve(stage === "headers" ? response(detail(item, "LATE"), 200, "u2") : stage === "error JSON body" ? { detail: "Late rejected detail" } : detail(item, "LATE")); await flush();
+      assert.equal(app.ui("markdown-source").value, "FRESH"); assert.equal(app.ui("account-name").textContent, "member"); assert(app.ui("connection-notice").hidden); app.stop();
+    });
+  }
+  await test("authenticated 401 headers clear private state without waiting for an error body", async () => {
+    const body = deferred(), item = job("private-401"); let bodyReads = 0;
+    const app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/private-401": () => response(detail(item, "PRIVATE")) } }); await flush();
+    app.history("select"); await flush(); app.add(file("private.md"));
+    app.state.routes["GET /api/jobs"] = () => ({ ...response({}, 401), json: () => { bodyReads += 1; return body.promise; } });
+    app.ui("refresh-button").click(); await flush();
+    assert(app.ui("session-section").hidden); assert.equal(app.ui("markdown-source").value, ""); assert.equal(app.ui("history-count").textContent, "0"); assert.equal(app.ui("queue-count").textContent, "0"); assert(app.ui("auth-message").textContent.includes("登录已失效")); assert.equal(bodyReads, 0); assert.equal(app.timers.size, 0);
+    delete app.state.routes["GET /api/jobs"]; app.state.routes["POST /api/auth/login"] = (_, state) => { state.me = identity({ id: "u2", username: "other" }); state.jobs = []; return response(state.me, 200, "u2"); };
+    app.login("other"); await flush(); body.resolve({ detail: "Old unauthorized body" }); await flush(); assert.equal(app.ui("account-name").textContent, "other"); app.stop();
+  });
+  await test("401 headers arriving after a request timeout cannot clear the current session", async () => {
+    const headers = deferred(), item = job("late-401"), app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/late-401": () => headers.promise } }); await flush();
+    app.history("select"); await flush(); await app.advance(30000); assert(!app.ui("document-reload").hidden);
+    app.state.routes["GET /api/jobs/late-401"] = () => response(detail(item, "CURRENT")); app.ui("document-reload").click(); await flush();
+    headers.resolve(response({ detail: "Old unauthorized response" }, 401)); await flush(); assert.equal(app.ui("account-name").textContent, "member"); assert.equal(app.ui("markdown-source").value, "CURRENT"); assert(!app.ui("session-section").hidden); app.stop();
+  });
+  await test("unauthenticated bootstrap 401 error bodies keep their bounded response handling", async () => {
+    const body = deferred(), app = createApp({ routes: { "GET /api/me": () => ({ ...response({}, 401), json: () => body.promise }) } }); await flush();
+    app.ui("login-username").value = "still-typing"; assert(app.ui("reconnect-button").disabled); assert(!app.ui("auth-message").textContent.includes("登录已失效"));
+    await app.advance(30000); assert(!app.ui("reconnect-button").disabled); assert(app.ui("auth-message").textContent.includes("超时")); assert.equal(app.ui("login-username").value, "still-typing");
+    body.resolve({ detail: "Unauthenticated" }); await flush(); assert(app.ui("auth-message").textContent.includes("超时")); app.stop();
+  });
+  for (const stage of ["headers", "blob body"]) {
+    await test(`ZIP transfer deadline allows slow downloads and bounds hanging ${stage}`, async () => {
+      const late = deferred(), app = createApp({ me: identity(), jobs: [job("zip")], routes: { "POST /api/jobs/archive": () => stage === "headers" ? late.promise : { ...response(null), blob: () => late.promise } } }); await flush();
+      app.check(); app.ui("archive-button").click(); await flush(); await app.advance(30001);
+      assert(app.ui("archive-button").disabled); assert(!app.calls("/api/jobs/archive")[0].options.signal.aborted); assert.equal(app.ui("notice").textContent, "");
+      await app.advance(149998); assert(app.ui("archive-button").disabled); assert.equal(app.calls("/api/jobs/archive").length, 1);
+      await app.advance(1); assert(!app.ui("archive-button").disabled); assert(app.ui("notice").textContent.includes("超时")); assert(app.calls("/api/jobs/archive")[0].options.signal.aborted);
+      assert.equal(app.calls("/api/jobs/archive").length, 1); late.resolve(stage === "headers" ? response(new Blob(["LATE ZIP"])) : new Blob(["LATE ZIP"])); await flush(); assert.equal(app.document.downloads.length, 0); assert.equal(app.urls.size, 0);
+      app.state.routes["POST /api/jobs/archive"] = () => response(new Blob(["FRESH ZIP"])); app.ui("archive-button").click(); await flush(); assert.equal(app.document.downloads.length, 1); app.stop();
+    });
+  }
+  for (const stage of ["headers", "JSON body", "error JSON body"]) {
+    await test(`upload deadline retains bytes engine and key after hanging ${stage} and rejected replays`, async () => {
+      const late = deferred(), source = file("deadline.pdf"), accepted = job("accepted-deadline", "queued", { filename: "deadline.pdf", engine: "docling" });
+      const app = createApp({ me: identity(), config: enhancedConfig, routes: { "POST /api/jobs": () => stage === "headers" ? late.promise : { ...response({}, stage === "error JSON body" ? 503 : 202), json: () => late.promise } } }); await flush();
+      app.ui("engine-docling").emit("change"); app.add(source); app.ui("convert-button").click(); await flush();
+      await app.advance(179999); assert(app.ui("upload-recheck").hidden); assert(app.ui("choose-button").disabled); assert(!app.calls("/api/jobs", "POST")[0].options.signal.aborted);
+      await app.advance(1); assert(!app.ui("upload-recheck").hidden); assert(!app.ui("upload-recheck").disabled); assert(app.ui("notice").textContent.includes("超时")); assert.equal(app.calls("/api/jobs", "POST").length, 1);
+      for (const rejectedStatus of [403, 429, 503]) {
+        app.state.routes["POST /api/jobs"] = () => response({ detail: "Rejected before reconciliation" }, rejectedStatus); app.ui("upload-recheck").click(); await flush();
+        assert(!app.ui("upload-recheck").hidden); assert(app.ui("convert-button").disabled); assert(app.ui("choose-button").disabled); assert(app.ui("engine-markitdown").disabled);
+      }
+      late.resolve(stage === "headers" ? response({ jobs: [accepted], errors: [] }, 202) : stage === "error JSON body" ? { detail: "Late rejection" } : { jobs: [accepted], errors: [] }); await flush();
+      assert.equal(app.ui("queue-count").textContent, "1"); assert.equal(app.ui("history-count").textContent, "0"); assert(!app.ui("upload-recheck").hidden);
+      app.state.routes["POST /api/jobs"] = (_, state) => { state.jobs = [accepted]; state.usage.used = 1; state.usage.remaining -= 1; return response({ jobs: [accepted], errors: [] }, 202); };
+      app.ui("upload-recheck").click(); await flush(); const calls = app.calls("/api/jobs", "POST"); assert.equal(calls.length, 5);
+      assert.equal(new Set(calls.map((call) => call.options.headers["Idempotency-Key"])).size, 1);
+      for (const call of calls) { assert.equal(call.options.body.parts[0][1], "docling"); assert.equal(call.options.body.parts[1][1], source); }
+      assert.equal(app.ui("queue-count").textContent, "0"); assert.equal(app.ui("history-count").textContent, "1"); assert(app.ui("upload-recheck").hidden); assert.equal(app.state.usage.used, 1); app.stop();
+    });
+  }
+  for (const stage of ["headers", "JSON body"]) {
+    await test(`logout deadline clears privacy immediately and bounds hanging ${stage}`, async () => {
+      const late = deferred(), item = job("private-deadline"), app = createApp({ me: identity(), jobs: [item], routes: { "GET /api/jobs/private-deadline": () => response(detail(item, "PRIVATE")), "POST /api/auth/logout": () => stage === "headers" ? late.promise : { ...response({ status: "ok" }), json: () => late.promise } } }); await flush();
+      app.history("select"); await flush(); app.add(file("private.md")); app.ui("logout-button").click();
+      assert.equal(app.ui("markdown-source").value, ""); assert.equal(app.ui("queue-count").textContent, "0"); assert.equal(app.ui("history-count").textContent, "0"); assert(app.ui("session-section").hidden); assert(app.ui("logout-retry").disabled);
+      await flush(); await app.advance(30000); assert(!app.ui("logout-retry").disabled); assert(!app.ui("logout-retry").hidden); assert(app.ui("login-button").disabled); assert(app.ui("auth-message").textContent.includes("尚未确认退出")); assert.equal(app.calls("/api/auth/logout").length, 1);
+      app.login(); assert.equal(app.calls("/api/auth/login").length, 0); assert(app.calls("/api/auth/logout")[0].options.signal.aborted);
+      delete app.state.routes["POST /api/auth/logout"]; app.ui("logout-retry").click(); await flush(); assert(app.ui("logout-retry").hidden); assert(!app.ui("login-button").disabled);
+      app.state.routes["POST /api/auth/login"] = (_, state) => { state.me = identity({ id: "u2", username: "other" }); state.jobs = []; return response(state.me, 200, "u2"); }; app.login("other"); await flush();
+      late.resolve(stage === "headers" ? response({ detail: "Late identity mismatch" }, 403, "u3") : { status: "ok" }); await flush(); assert.equal(app.ui("account-name").textContent, "other"); assert(app.ui("connection-notice").hidden); app.stop();
+    });
+  }
+  await test("request deadline does not automatically repeat non-idempotent invitations", async () => {
+    const late = deferred(), app = createApp({ me: identity({ is_admin: true }), routes: { "GET /api/admin/invites": () => response({ invites: [] }), "GET /api/admin/users": () => response({ users: [] }), "POST /api/admin/invites": () => late.promise } }); await flush();
+    app.ui("admin-toggle").click(); await flush(); app.ui("invite-create").click(); await flush(); await app.advance(30000);
+    assert(!app.ui("invite-create").disabled); assert(app.ui("admin-status").textContent.includes("超时")); assert.equal(app.calls("/api/admin/invites", "POST").length, 1);
+    late.resolve(response({ token: "LATE", expires_at: NOW / 1000 + 3600 })); await flush(); assert.equal(app.ui("new-invite-token").value, ""); assert(app.ui("invite-result").hidden); app.stop();
+  });
+  await test("intentional selection and pagehide cancellation stay silent and release deadline resources", async () => {
+    const late = deferred(), app = createApp({ me: identity(), jobs: [job("a"), job("b")], routes: { "GET /api/jobs/a": () => late.promise, "GET /api/jobs/b": () => response(detail(job("b"), "CURRENT")) } }); await flush();
+    app.history("select", 0); await flush(); app.history("select", 1); await flush(); await app.advance(30000);
+    assert.equal(app.ui("markdown-source").value, "CURRENT"); assert.equal(app.ui("notice").textContent, "");
+    assert(app.calls("/api/jobs/a")[0].options.signal.aborted); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0));
+    app.history("select", 0); await flush(); app.stop(); await flush(); assert.equal(app.timers.size, 0); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0));
+    const message = app.ui("auth-message").textContent; await app.advance(180000); late.reject(new Error("Late network failure")); await flush();
+    assert.equal(app.ui("auth-message").textContent, message); assert.equal(app.ui("notice").textContent, ""); assert.equal(app.ui("markdown-source").value, "");
+  });
+  await test("logout intentionally aborts an ignored-abort upload without showing timeout or restoring state", async () => {
+    const late = deferred(), app = createApp({ me: identity(), routes: { "POST /api/jobs": () => late.promise } }); await flush();
+    app.add(file("private-hang.md")); app.ui("convert-button").click(); await flush(); app.ui("logout-button").click(); await flush();
+    assert(app.calls("/api/jobs", "POST")[0].options.signal.aborted); assert.equal(app.timers.size, 0); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0));
+    await app.advance(180000); late.resolve(response({ jobs: [job("late")], errors: [] }, 202)); await flush();
+    assert.equal(app.ui("notice").textContent, ""); assert.equal(app.ui("queue-count").textContent, "0"); assert.equal(app.ui("history-count").textContent, "0"); assert(app.ui("upload-recheck").hidden); assert(app.ui("auth-message").textContent.includes("已退出登录")); app.stop();
+  });
+  await test("successful requests remove deadline timers and all abort listeners", async () => {
+    const app = createApp({ me: identity(), jobs: [job("cleanup")], routes: { "GET /api/jobs/cleanup": () => response(detail(job("cleanup"))) } }); await flush();
+    app.history("select"); await flush(); assert(![...app.timers.values()].some((timer) => [30000, 180000].includes(timer.delay))); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0));
+    await app.advance(30000); assert.equal(app.ui("notice").textContent, ""); assert.equal(app.ui("markdown-source").value, "# Fresh");
+    app.ui("logout-button").click(); await flush(); assert.equal(app.timers.size, 0); assert(app.abortControllers.every((controller) => controller.abortListeners.size === 0)); app.stop();
+  });
+  await test("retention accepts only finite positive numbers and never invents zero or negative hours", async () => {
+    for (const value of [undefined, null, "", "7200", false, true, 0, -3600, NaN, Infinity, -Infinity, [], {}]) {
+      const app = createApp({ me: identity(), config: { ...baseConfig, retention_seconds: value }, jobs: [job("retention", "failed")] }); await flush(); app.history("select");
+      assert(app.ui("auth-retention").textContent.includes("由服务决定"), `Invalid retention: ${String(value)}`); assert(app.ui("account-retention").textContent.includes("由服务决定")); assert(!app.ui("account-retention").textContent.includes("0 小时"));
+      assert(app.ui("document-expiry").textContent.includes("2026-10-06")); app.stop();
+    }
+    for (const [value, expected] of [[1, "不足 0.01 小时"], [3600, "1 小时"], [5400, "1.5 小时"], [86400, "24 小时"]]) {
+      const app = createApp({ config: { ...baseConfig, retention_seconds: value } }); await flush(); assert(app.ui("auth-retention").textContent.includes(expected)); app.stop();
+    }
   });
 
   assert(!script.includes("localStorage") && !script.includes("sessionStorage"));
