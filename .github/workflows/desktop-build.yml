@@ -15,9 +15,9 @@ jobs:
       matrix:
         include:
           - os: macos-14
-            build: build:mac
+            build: build:evidence:mac
           - os: windows-latest
-            build: build:win
+            build: build:evidence:win
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -69,6 +69,8 @@ jobs:
         env:
           ORT_DISABLE_TELEMETRY: '1'
         run: .venv/bin/python scripts/verify-desktop-service.py --app packages/markitdown-desktop/dist/mac-arm64/MarkItDown.app --out "${{ runner.temp }}/markitdown-packaged-evidence"
+      - name: Bind unsigned installers to clean source and packaged runtime
+        run: npm run evidence:finalize
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: MarkItDown-${{ matrix.os }}-unsigned-${{ github.sha }}
@@ -76,5 +78,6 @@ jobs:
             packages/markitdown-desktop/dist/*.dmg
             packages/markitdown-desktop/dist/*.zip
             packages/markitdown-desktop/dist/*.exe
+            packages/markitdown-desktop/dist/*.build-evidence.json
           if-no-files-found: error
           retention-days: 14

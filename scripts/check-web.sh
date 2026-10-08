@@ -20,4 +20,5 @@ if command -v node >/dev/null 2>&1; then
   node --check packages/markitdown-web/src/markitdown_web/static/app.js
   node --check packages/markitdown-web/src/markitdown_web/static/site.js
   node packages/markitdown-web/tests/frontend_dom.cjs
+  node packages/markitdown-web/tests/site_dom.cjs
 fi
