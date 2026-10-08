@@ -10,7 +10,7 @@ const evidence = require("../scripts/build-evidence.cjs");
 function git(root, ...args) { return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: "pipe" }).trim(); }
 function write(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); }
 function writeJson(file, value) { write(file, JSON.stringify(value, null, 2) + "\n"); }
-function fixture(t) {
+function fixture(t, { legacyCrlf = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "markitdown-evidence-test-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, "packages/markitdown-desktop");
@@ -27,6 +27,15 @@ function fixture(t) {
   write(path.join(root, "packages/markitdown-web/src/markitdown_web/__init__.py"), '__version__ = "1.0.0"\n');
   write(path.join(root, "packages/markitdown-web/pyproject.toml"), '[project]\nversion = "1.0.0"\n');
   write(path.join(root, "packages/markitdown/src/markitdown/__about__.py"), '__version__ = "0.1.8"\n');
+  if (legacyCrlf) {
+    // Match this repository's attributes: fixture directories are vendored, but
+    // only PDFs are binary. CRLF text blobs predate Windows autocrlf checkout.
+    write(path.join(root, ".gitattributes"), "packages/markitdown/tests/test_files/** linguist-vendored\npackages/markitdown-sample-plugin/tests/test_files/** linguist-vendored\n*.pdf binary\n");
+    write(path.join(root, "SUPPORT.md"), "Legacy support text\r\n");
+    write(path.join(root, "packages/markitdown-sample-plugin/tests/test_files/test.rtf"), "{\\rtf1 Legacy fixture}\r\n");
+    write(path.join(root, "packages/markitdown/tests/test_files/test_mskanji.csv"), Buffer.from([0x82, 0xa0, 0x2c, 0x82, 0xa2, 0x0d, 0x0a]));
+    write(path.join(project, "src/legacy.txt"), "Legacy runtime text\r\n");
+  }
   git(root, "init"); git(root, "config", "user.email", "synthetic@example.invalid"); git(root, "config", "user.name", "Synthetic evidence test");
   git(root, "config", "core.autocrlf", "false"); git(root, "add", ".");
   git(root, "-c", "commit.gpgsign=false", "commit", "-m", "Synthetic evidence fixture");
@@ -90,6 +99,55 @@ test("ordinary Windows CRLF checkout still binds normalized Git source", t => {
   }
   const windows = evidence.sourceSnapshot(f.root, f.environment);
   assert.equal(windows.source.commit, f.snapshot.source.commit); assert.notDeepEqual(windows.resources, f.snapshot.resources);
+});
+test("Windows accepts exact legacy CRLF blobs alongside normalized LF blobs", t => {
+  const f = fixture(t, { legacyCrlf: true });
+  git(f.root, "config", "core.autocrlf", "true");
+  // A fresh checkout preserves historical CRLF blobs while converting LF blobs.
+  for (const relative of git(f.root, "ls-files", "-z").split("\0").filter(Boolean)) fs.unlinkSync(path.join(f.root, relative));
+  git(f.root, "checkout", "--", ".");
+  assert.equal(git(f.root, "status", "--porcelain"), "");
+  for (const relative of ["SUPPORT.md", "packages/markitdown-sample-plugin/tests/test_files/test.rtf", "packages/markitdown/tests/test_files/test_mskanji.csv", "packages/markitdown-desktop/src/legacy.txt"]) {
+    const committed = git(f.root, "rev-parse", `HEAD:${relative}`);
+    assert.equal(git(f.root, "hash-object", "--no-filters", relative), committed);
+    assert.notEqual(git(f.root, "hash-object", relative), committed);
+  }
+  const windows = evidence.sourceSnapshot(f.root, f.environment);
+  assert.equal(windows.source.commit, f.snapshot.source.commit);
+  assert.deepEqual(windows.resources.find(item => item.path === "src/legacy.txt"), f.snapshot.resources.find(item => item.path === "src/legacy.txt"));
+});
+test("legacy CRLF fallback rejects same-size tampering and reports only relative paths", t => {
+  const f = fixture(t, { legacyCrlf: true });
+  git(f.root, "config", "core.autocrlf", "true");
+  git(f.root, "config", "core.trustctime", "false");
+  const file = path.join(f.root, "SUPPORT.md");
+  const timestamp = Math.floor(Date.now() / 1000) - 3600;
+  fs.utimesSync(file, timestamp, timestamp); git(f.root, "update-index", "--refresh");
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("Legacy", "Edited"));
+  fs.utimesSync(file, timestamp, timestamp);
+  assert.equal(git(f.root, "status", "--porcelain"), "");
+  assert.throws(() => evidence.sourceSnapshot(f.root, f.environment), error => {
+    assert.match(error.message, /Tracked source bytes differ.*SUPPORT\.md/);
+    assert(!error.message.includes(f.root));
+    return true;
+  });
+});
+test("source mismatch diagnostics are bounded even when many paths changed", t => {
+  const f = fixture(t);
+  git(f.root, "config", "core.trustctime", "false");
+  const paths = [...f.snapshot.resources.map(item => path.join(f.project, item.path)), path.join(f.project, "package.json")];
+  const timestamp = Math.floor(Date.now() / 1000) - 3600;
+  for (const file of paths) fs.utimesSync(file, timestamp, timestamp);
+  git(f.root, "update-index", "--refresh");
+  for (const file of paths) {
+    const bytes = fs.readFileSync(file); bytes[0] ^= 1; fs.writeFileSync(file, bytes); fs.utimesSync(file, timestamp, timestamp);
+  }
+  assert.equal(git(f.root, "status", "--porcelain"), "");
+  assert.throws(() => evidence.sourceSnapshot(f.root, f.environment), error => {
+    assert.match(error.message, /additional paths omitted/);
+    assert(!error.message.includes(f.root)); assert(error.message.length < 600);
+    return true;
+  });
 });
 test("source/lock version drift fails closed", t => {
   const f = fixture(t); f.pkg.version = "1.1.0-dev.2"; writeJson(path.join(f.project, "package.json"), f.pkg); git(f.root, "add", ".");

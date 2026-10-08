@@ -99,7 +99,23 @@ function sourceSnapshot(root, environment = process.env) {
   const hashes = command("git", ["-C", root, "hash-object", "--stdin-paths"], {
     input: treeEntries.map(entry => JSON.stringify(entry.path)).join("\n") + "\n",
   }).toString("utf8").trim().split("\n");
-  requireThat(isDeepStrictEqual(hashes, treeEntries.map(entry => entry.hash)), "Tracked source bytes differ from the source commit.");
+  requireThat(hashes.length === treeEntries.length, "Incomplete tracked source hash result.");
+  const filteredMismatches = treeEntries.filter((entry, index) => hashes[index] !== entry.hash);
+  if (filteredMismatches.length) {
+    // Some legacy blobs were committed with CRLF. On Windows, clean filtering
+    // normalizes even those already-exact bytes. Accept only an exact committed
+    // raw blob OR the normal Git-filtered blob, never arbitrary EOL normalization.
+    const rawHashes = command("git", ["-C", root, "hash-object", "--no-filters", "--stdin-paths"], {
+      input: filteredMismatches.map(entry => JSON.stringify(entry.path)).join("\n") + "\n",
+    }).toString("utf8").trim().split("\n");
+    requireThat(rawHashes.length === filteredMismatches.length, "Incomplete raw source hash result.");
+    const mismatches = filteredMismatches.filter((entry, index) => rawHashes[index] !== entry.hash);
+    const diagnostic = mismatches.slice(0, 3).map(entry => {
+      const relative = entry.path;
+      return /^[A-Za-z0-9_./-]{1,160}$/.test(relative) && !relative.startsWith("/") && !relative.split("/").includes("..") ? relative : "<tracked-path>";
+    }).join(", ");
+    requireThat(mismatches.length === 0, `Tracked source bytes differ from the source commit: ${diagnostic}${mismatches.length > 3 ? " (additional paths omitted)" : ""}.`);
+  }
   const project = path.join(root, PROJECT);
   const pkg = json(path.join(project, "package.json"));
   const lock = json(path.join(project, "package-lock.json"));
@@ -121,8 +137,10 @@ function sourceSnapshot(root, environment = process.env) {
   const resources = runtimeFiles.map(relative => {
     requireThat(/^[A-Za-z0-9_./-]+$/.test(relative) && !relative.split("/").includes(".."), "Unsafe runtime resource name.");
     const file = path.join(root, relative);
-    // Git's clean filters account for an ordinary Windows CRLF checkout.
-    requireThat(git(root, "hash-object", `--path=${relative}`, file) === git(root, "rev-parse", `HEAD:${relative}`), "Runtime source differs from the source commit.");
+    // Apply the same exact-raw-or-Git-filtered rule to runtime resources.
+    const committedHash = git(root, "rev-parse", `HEAD:${relative}`);
+    requireThat(git(root, "hash-object", `--path=${relative}`, file) === committedHash || git(root, "hash-object", "--no-filters", file) === committedHash,
+      `Runtime source differs from the source commit: ${relative}.`);
     return { path: relative.slice(PROJECT.length + 1), ...fileDigest(file) };
   });
   return {
