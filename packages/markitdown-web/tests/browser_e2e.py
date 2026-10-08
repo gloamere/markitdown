@@ -60,6 +60,27 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def chooser_diagnostics(data: dict) -> dict:
+    """Only bounded event counts and readiness booleans can enter public logs."""
+    fields = {
+        "focused",
+        "chooser_enabled",
+        "input_enabled",
+        "event_seen",
+        "enter_count",
+        "chooser_enter_count",
+        "trusted_enter_count",
+        "chooser_click_count",
+        "input_click_count",
+    }
+    return {
+        key: value
+        for key, value in data.items()
+        if key in fields
+        and (type(value) is bool or type(value) is int and 0 <= value <= 100)
+    }
+
+
 def public_failure(error: BaseException) -> dict:
     """Public CI logs contain locations/categories, never page values or files."""
     detail = str(error)
@@ -77,7 +98,15 @@ def public_failure(error: BaseException) -> dict:
         for frame in traceback.extract_tb(error.__traceback__)
         if Path(frame.filename).name == Path(__file__).name
     ]
-    return {"type": type(error).__name__, "category": category, "locations": locations}
+    result = {
+        "type": type(error).__name__,
+        "category": category,
+        "locations": locations,
+    }
+    diagnostics = getattr(error, "keyboard_chooser_diagnostics", None)
+    if isinstance(diagnostics, dict):
+        result["keyboard_chooser"] = chooser_diagnostics(diagnostics)
+    return result
 
 
 def artifact_path(root: Path, relative: str) -> Path:
@@ -559,6 +588,78 @@ async def tab_to(page, selector: str, expect, stops: list) -> None:
     )
 
 
+async def keyboard_choose(page, expect, stops: list, evidence):
+    """Arm interception before Tab traversal; one Enter must open the chooser."""
+    # Observe only this synthetic gesture. Never record key text, inputs, labels,
+    # document content, URLs, usernames, or credentials.
+    await page.evaluate(
+        """() => {
+        const button = document.getElementById('choose-button');
+        const input = document.getElementById('file-input');
+        const counts = {enter_count: 0, chooser_enter_count: 0,
+            trusted_enter_count: 0, chooser_click_count: 0, input_click_count: 0};
+        const key = event => {
+            if (event.key !== 'Enter') return;
+            counts.enter_count++;
+            if (event.target === button) counts.chooser_enter_count++;
+            if (event.isTrusted) counts.trusted_enter_count++;
+        };
+        const click = event => {
+            if (event.target === button || button.contains(event.target)) counts.chooser_click_count++;
+            if (event.target === input) counts.input_click_count++;
+        };
+        document.addEventListener('keydown', key, true);
+        document.addEventListener('click', click, true);
+        window.__keyboardChooserProbe = {
+            read: () => ({...counts, focused: document.activeElement === button,
+                chooser_enabled: !button.disabled, input_enabled: !input.disabled}),
+            dispose: () => {
+                document.removeEventListener('keydown', key, true);
+                document.removeEventListener('click', click, true);
+                delete window.__keyboardChooserProbe;
+            }
+        };
+    }"""
+    )
+    event_seen = False
+    failure = None
+    try:
+        # Playwright 1.63 registers first event subscriptions without awaiting the
+        # driver's interception setup. Arm before real Tab/readiness round trips,
+        # not immediately before Enter. No delay, refocus, click, or retry.
+        async with page.expect_file_chooser() as event:
+            await tab_to(page, "#choose-button", expect, stops)
+            await expect(page.locator("#choose-button")).to_be_enabled()
+            await expect(page.locator("#file-input")).to_be_enabled()
+            await expect(page.locator("#choose-button")).to_be_focused()
+            await page.keyboard.press("Enter")
+        chooser = await event.value
+        event_seen = True
+        return chooser
+    except Exception as error:
+        failure = error
+        raise
+    finally:
+        try:
+            diagnostics = chooser_diagnostics(
+                await page.evaluate("() => window.__keyboardChooserProbe.read()")
+            )
+            diagnostics["event_seen"] = event_seen
+            evidence.data["keyboard_chooser"] = diagnostics
+            evidence.flush()
+            if failure is not None:
+                failure.keyboard_chooser_diagnostics = diagnostics
+        except Exception:
+            if failure is None:
+                raise  # Diagnostic collection must not hide the original failure.
+        finally:
+            try:
+                await page.evaluate("() => window.__keyboardChooserProbe.dispose()")
+            except Exception:
+                if failure is None:
+                    raise
+
+
 async def keyboard_journey(page, first_path, second_path, evidence, expect) -> dict:
     """All application interactions here use keyboard events. File bytes alone
     enter through Playwright's intercepted chooser, not an OS-dialog acceptance.
@@ -584,10 +685,21 @@ async def keyboard_journey(page, first_path, second_path, evidence, expect) -> d
     await expect(page.locator("#session-section")).to_be_visible()
     await expect(page.locator("#login-password")).to_have_value("")
     before = await api_ok(page, "/api/me")
-    await tab_to(page, "#choose-button", expect, stops)
-    async with page.expect_file_chooser() as event:
-        await page.keyboard.press("Enter")
-    chooser = await event.value
+    chooser = await keyboard_choose(page, expect, stops, evidence)
+    gesture = evidence.data["keyboard_chooser"]
+    require(
+        all(
+            gesture[field] == 1
+            for field in [
+                "enter_count",
+                "chooser_enter_count",
+                "trusted_enter_count",
+                "chooser_click_count",
+                "input_click_count",
+            ]
+        ),
+        "Chooser did not follow one trusted keyboard gesture",
+    )
     require(chooser.is_multiple(), "Keyboard chooser must allow multiple files")
     await chooser.set_files([str(first_path), str(second_path)])
     await expect(page.locator("#queue-count")).to_have_text("2")
@@ -1368,6 +1480,7 @@ class HarnessSelfChecks(unittest.TestCase):
         for function in tree.body:
             if isinstance(function, ast.AsyncFunctionDef) and function.name in {
                 "keyboard_journey",
+                "keyboard_choose",
                 "tab_to",
             }:
                 shortcuts = {
@@ -1389,6 +1502,65 @@ class HarnessSelfChecks(unittest.TestCase):
                 self.assertFalse(
                     shortcuts, f"Keyboard journey has shortcuts: {shortcuts}"
                 )
+
+    def test_chooser_expectation_precedes_keyboard_traversal(self):
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        traversals = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "tab_to"
+            and len(node.args) > 1
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "#choose-button"
+        ]
+        self.assertEqual(len(traversals), 1)
+        armed = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncWith)
+            and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Attribute)
+                and item.context_expr.func.attr == "expect_file_chooser"
+                for item in node.items
+            )
+        ]
+        self.assertTrue(
+            any(traversals[0] in list(ast.walk(node)) for node in armed),
+            "Chooser interception must be armed before Tab traversal",
+        )
+        for block in armed:
+            enters = [
+                node
+                for node in ast.walk(block)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "press"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "Enter"
+            ]
+            self.assertEqual(len(enters), 1, "The chooser gesture must use one Enter")
+
+    def test_chooser_diagnostics_exclude_content_and_allow_only_bounded_facts(self):
+        error = AssertionError("private-document-and-token")
+        error.keyboard_chooser_diagnostics = {
+            "focused": True,
+            "enter_count": 1,
+            "event_seen": False,
+            "input_enabled": "private-password",
+            "chooser_click_count": 1000,
+            "username": "private-user",
+            "source": "private-document",
+        }
+        result = public_failure(error)
+        self.assertEqual(
+            result["keyboard_chooser"],
+            {"focused": True, "enter_count": 1, "event_seen": False},
+        )
+        self.assertNotIn("private-", json.dumps(result))
 
     def test_checks_are_unique(self):
         self.assertEqual(len(STEPS), len(set(STEPS)))

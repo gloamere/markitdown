@@ -171,3 +171,34 @@ for exact workflow links and remaining manual/native/downstream gates. These CI
 results supersede only the automated execution gate, not visual or assistive-
 technology acceptance. The earlier cloud-local launch blockers remain accurately
 recorded above.
+
+## Chooser harness follow-up
+
+The docs-only head `61838219735e4f3850d3bf6db2aee0492e855499` (tested PR merge
+`7910c959446815111332af31924941b35840a413`, browser job `113127153850`) passed the
+first 12 browser scenarios, then timed out waiting for the keyboard chooser.
+The timeout did not record whether Enter reached the button or Chromium's chooser
+interception was ready. It does **not** establish an application focus defect.
+
+Inspection of the pinned Playwright 1.63 Python implementation shows that first
+listener registration sends `updateSubscription` without awaiting a reply and the
+event context manager enters immediately; the driver enables Chromium file
+chooser interception asynchronously. This makes a setup race **plausible**, not a
+confirmed explanation of that CI failure.
+
+The harness now arms the chooser expectation before actual Tab traversal and
+explicit enabled/focused assertions, preserving exactly one Enter. It adds no
+pointer action, programmatic focus, sleep, retry, or alternate file-input path.
+Temporary observers count only the synthetic gesture's Enter and button/input
+click events. Bounded counts and readiness/event-seen booleans enter the private
+evidence and a content-free failure summary; no input text, names, paths,
+credentials, or document content are recorded. Successful chooser activation
+also requires one trusted Enter and one button/input click chain.
+
+The new registration-order self-check failed against the earlier ordering and
+passes after the change. The harness now passes 12 stdlib self-checks, including
+ordering/single-Enter and diagnostic-redaction checks; Ruff, Black, syntax, and
+unchanged 99-scenario frontend checks pass locally. Application bytes, native
+smoke code, dependencies, and workflows are unchanged by this follow-up. A fresh
+exact-head browser CI run remains required; local Chromium availability has not
+changed. Prior green runs do not erase the later failed run.
